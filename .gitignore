@@ -1,0 +1,25 @@
+# Build output
+Sysex77-master/Builds/VisualStudio2022/x64/
+Sysex77-master/Builds/VisualStudio2026/x64/
+Sysex77-master/Builds/*/x64/
+**/*.exe
+**/*.pdb
+**/*.ilk
+**/*.obj
+**/*.iobj
+**/*.ipdb
+**/*.exp
+**/*.lib
+**/*.dll
+**/.vs/
+
+# JUCE generated (regenerate from .jucer)
+# Sysex77-master/JuceLibraryCode/ — kept intentionally (pre-generated)
+
+# OS
+Thumbs.db
+desktop.ini
+.DS_Store
+
+# Large binary (scanned PDF, no text layer — link in SY99E2_reference.txt)
+_agent_context/SY99E2.pdf

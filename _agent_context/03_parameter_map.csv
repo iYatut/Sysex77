@@ -1,0 +1,38 @@
+group_id,group_name,offset_hex,param_name,range_min,range_max,display_unit,element,notes,source
+VC_M_00,Voice Common Data,02000000,ELMODE,0,10,index,Common,Element Mode (0=1AFM_mono through 10=DRUM_SET per sy99_sysex_complete.md),manual
+VC_M_VNAM0,Voice Common Data,02000001,VNAM0,32,126,ASCII,Common,Voice name character,manual
+VC_M_VNAM1,Voice Common Data,02000002,VNAM1,32,126,ASCII,Common,Voice name character,manual
+VC_M_VNAM2,Voice Common Data,02000003,VNAM2,32,126,ASCII,Common,Voice name character,manual
+VC_M_VNAM3,Voice Common Data,02000004,VNAM3,32,126,ASCII,Common,Voice name character,manual
+VC_M_VNAM4,Voice Common Data,02000005,VNAM4,32,126,ASCII,Common,Voice name character,manual
+VC_M_VNAM5,Voice Common Data,02000006,VNAM5,32,126,ASCII,Common,Voice name character,manual
+VC_M_VNAM6,Voice Common Data,02000007,VNAM6,32,126,ASCII,Common,Voice name character,manual
+VC_M_VNAM7,Voice Common Data,02000008,VNAM7,32,126,ASCII,Common,Voice name character,manual
+VC_M_VNAM8,Voice Common Data,02000009,VNAM8,32,126,ASCII,Common,Voice name character,manual
+VC_M_VNAM9,Voice Common Data,0200000A,VNAM9,32,126,ASCII,Common,Voice name character,manual
+VC_M_WPBR,Voice Common Data,02000028,WPBR,0,12,MIDI_7bit,Common,Wheel Pitch Bend Range,manual
+VC_M_ATPBR,Voice Common Data,02000029,ATPBR,-12,12,semitones,Common,AfterTouch Pitch Bend Range,manual
+VC_M_PMASN,Voice Common Data,0200002A,PMASN,0,121,MIDI_7bit,Common,Pitch Mod Device Assign,manual
+VC_M_PMRNG,Voice Common Data,0200002B,PMRNG,0,127,MIDI_7bit,Common,Pitch Mod Range,manual
+VC_M_AMASN,Voice Common Data,0200002C,AMASN,0,121,MIDI_7bit,Common,Amplitude Mod Device Assign,manual
+VC_M_AMRNG,Voice Common Data,0200002D,AMRNG,0,127,MIDI_7bit,Common,Amplitude Mod Range,manual
+VC_M_FMASN,Voice Common Data,0200002E,FMASN,0,121,MIDI_7bit,Common,Filter Mod Device Assign,manual
+VC_M_FMRNG,Voice Common Data,0200002F,FMRNG,0,127,MIDI_7bit,Common,Filter Mod Range,manual
+VC_M_PNLASN,Voice Common Data,02000030,PNLASN,0,121,MIDI_7bit,Common,PAN Level Device Assign,manual
+VC_M_PNLRNG,Voice Common Data,02000031,PNLRNG,0,127,MIDI_7bit,Common,PAN Level Range,manual
+VC_M_COASN,Voice Common Data,02000032,COASN,0,121,MIDI_7bit,Common,Filter Cutoff Bias Device Assign,manual
+VC_M_CORNG,Voice Common Data,02000033,CORNG,0,127,MIDI_7bit,Common,Filter Cutoff Range,manual
+VC_M_PNBASN,Voice Common Data,02000034,PNBASN,0,121,MIDI_7bit,Common,PAN Bias Device Assign,manual
+VC_M_PNBRNG,Voice Common Data,02000035,PNBRNG,0,127,MIDI_7bit,Common,PAN Bias Range,manual
+VC_M_EGBASN,Voice Common Data,02000036,EGBASN,0,121,MIDI_7bit,Common,EG Bias Device Assign,manual
+VC_M_EGBRNG,Voice Common Data,02000037,EGBRNG,0,127,MIDI_7bit,Common,EG Bias Range,manual
+VC_M_WLASN,Voice Common Data,02000038,WLASN,0,121,MIDI_7bit,Common,Voice Volume Device Assign,manual
+VC_M_WLLML,Voice Common Data,02000039,WLLML,0,127,MIDI_7bit,Common,Volume Limit Low,manual
+VC_M_MCTUN,Voice Common Data,0200003A,MCTUN,0,65,index,Common,Micro Tuning table select,manual
+VC_M_RNDP,Voice Common Data,0200003B,RNDP,0,7,index,Common,Random Pitch fluctuation,manual
+VC_M_WOL,Voice Common Data,0200003F,WOL,,,MIDI_7bit,Common,Wave Volume (see SY99 manual for scaling),manual
+VC_M_AFTMD,Voice Common Data,02000042,AFTMD,,,enum,Common,Zoned AfterTouch mode: all/top/btm/hi/low,manual
+VC_M_SPTPNT,Voice Common Data,02000043,SPTPNT,0,127,MIDI_7bit,Common,Zoned AfterTouch split point,manual
+OBS_IMPL_00,Voice Common Data,02000000,ELMODE_impl_code,0,9,index,Common,VoicePage comboMode; MidiSysex adresseOpMode — UI indices 0-9 for 10 modes; compare to manual ELMODE 0-10,observed
+OBS_IMPL_3F,Voice Common Data,0200003F,WOL_impl_code,0,127,MIDI_7bit,Common,sliderMaster + oscTotalVoiceVolume; aligns with manual NN=3F WOL,observed
+ZZ00,_workspace_notice,00000000,_reference_files_,,,meta,N/A,Primary transcription: _agent_context/sy99_sysex_complete.md (user-supplied). SY99E2.PDF link in SY99E2_reference.txt,manual
