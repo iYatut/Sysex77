@@ -118,7 +118,15 @@ struct VoicePage   : public Component, public Slider::Listener, public ComboBox:
         comboMode.addItem("4 AWM POLY", 8);
         comboMode.addItem("1 AFM & 1 AWM POLY", 9);
         comboMode.addItem("2 AFM & 2 AWM POLY", 10);
+        comboMode.addItem("DRUM SET", 11);
         comboMode.setSelectedId(1);
+
+        // ELMODE receive: listen to incoming SysEx; match address 02 00 00 00.
+        valueSysexIn.addListener(this);
+
+        // Voice Common Params panel (Group B: 02 00 00 28..43)
+        addAndMakeVisible (commonPanel);
+        buildCommonPanel();
         
        
  
@@ -179,7 +187,7 @@ struct VoicePage   : public Component, public Slider::Listener, public ComboBox:
         element4.removeChangeListener(this);
         editName.removeListener(this);
         comboMode.removeListener(this);
- 
+        valueSysexIn.removeListener(this);
     }
     
     #include "ValueTrees.h"
@@ -230,8 +238,40 @@ struct VoicePage   : public Component, public Slider::Listener, public ComboBox:
     }
     void valueChanged(Value & value) override
     {
-   
-       
+        if (value.refersToSameSourceAs(valueSysexIn))
+        {
+            auto incoming = value.getValue();
+            const int b3 = (int) incoming[0];
+            const int b4 = (int) incoming[1];
+            const int b5 = (int) incoming[2];
+            const int b6 = (int) incoming[3];
+            const int b8 = (int) incoming[5];
+
+            // ELMODE receive: address 02 00 00 00 → update comboMode
+            if (b3 == 0x02 && b4 == 0x00 && b5 == 0x00 && b6 == 0x00)
+            {
+                if (b8 >= 0 && b8 <= 10)
+                    comboMode.setSelectedId (b8 + 1, juce::dontSendNotification);
+                return;
+            }
+
+            // VNAM receive: addresses 02 00 00 01..0A → 10-char voice name buffer.
+            // Programmatic editName.setText uses dontSendNotification so we do not
+            // re-trigger textEditorReturnKeyPressed (no outbound VNAM echo).
+            if (b3 == 0x02 && b4 == 0x00 && b5 == 0x00
+                && b6 >= 0x01 && b6 <= 0x0A)
+            {
+                const int idx = b6 - 0x01;
+                voiceNameBuffer[idx] = (char) (b8 & 0x7F);
+                receivingVNAM = true;
+                String name (voiceNameBuffer, sizeof (voiceNameBuffer));
+                editName.setText (name.trimEnd(), juce::dontSendNotification);
+                receivingVNAM = false;
+                return;
+            }
+            return;
+        }
+
         if(value.refersToSameSourceAs(element1.elementValue))
         {
             Logger::writeToLog("Value change element1");
@@ -336,17 +376,25 @@ struct VoicePage   : public Component, public Slider::Listener, public ComboBox:
     void textEditorReturnKeyPressed	(	TextEditor & 	editText	) override
     {
         Logger::writeToLog("Voice TextEditor return");
+        // Programmatic updates from VNAM receive must never send back.
+        if (receivingVNAM)
+            return;
         String str = editText.getText();
-        uint8 sysexdata[9] = { 0x43, 0X10, 0x34, 0x02, 0x00, 0x00, 0x01, 0x00, 0x00 };
-       const char* data = str.toRawUTF8();
-        for (auto i=0; i<10; i++) {
-            sysexdata[8] = data[i];
-            oscMidiMessage[i] = MidiMessage::createSysExMessage(sysexdata, 9);
+        // VNAM*: 10 SysEx messages, address byte [6] = 0x01 .. 0x0A, value = char.
+        // Pad short names with space (0x20) so the synth display is fully cleared.
+        uint8 sysexdata[9] = { 0x43, sysexEngine, 0x34, 0x02, 0x00, 0x00, 0x01, 0x00, 0x00 };
+        const int len = str.length();
+        const char* data = str.toRawUTF8();
+        oscMidiMessage.clear();
+        for (auto i = 0; i < 10; ++i)
+        {
+            sysexdata[6] = (uint8) (0x01 + i);
+            sysexdata[8] = (uint8) (i < len ? data[i] : 0x20);
+            oscMidiMessage.set (i, MidiMessage::createSysExMessage (sysexdata, 9));
         }
-            if (! sender.send (oscSendMidiMessage, (int) 10)) // [5]
-                Logger::writeToLog ("OSC erreur voice opMode");;
-
-        }
+        if (! sender.send (oscSendMidiMessage, (int) 10)) // [5]
+            Logger::writeToLog ("OSC erreur voice VNAM");
+    }
   
 
     
@@ -504,6 +552,13 @@ void setNombreElements (int nombre)
         labelOpOn.setBounds(10, 20, 96, 24);
         labelMasterVolume.setBounds(getWidth()-106, 20, 96, 24);
 
+        // Voice Common Params panel — right column under the master volume slider.
+        const int panelX = (int) (wGrid + 20);
+        const int panelY = 48;
+        const int panelW = getWidth() - panelX - 10;
+        const int panelH = getHeight() - panelY - 10;
+        commonPanel.setBounds (panelX, panelY, panelW, panelH);
+        layoutCommonPanel();
     }
     void addBtAndMakeStyle (TextButton& textButton)
     {
@@ -603,6 +658,154 @@ void setNombreElements (int nombre)
     int nombreElements = 1;
     OSCSender sender;  // [2]
     CustomLookAndFeel myLookAndFeel;
+
+    // VNAM receive: 10-char buffer fed by incoming SysEx 02 00 00 01..0A.
+    // Initialised to spaces so any partial update still renders cleanly.
+    char voiceNameBuffer[10] { ' ',' ',' ',' ',' ',' ',' ',' ',' ',' ' };
+    bool receivingVNAM = false;
+
+    // -------- Voice Common Params (addresses 02 00 00 28 .. 43) --------
+    // Continuous params → MidiSlider; enum/assign params → MidiCombo.
+    Component   commonPanel;
+    Label       labelCommon { "labelCommon", TRANS ("Common Params") };
+    // 28 WPBR, 29 ATPBR, 2B PMRNG, 2D AMRNG, 2F FMRNG, 31 PNLRNG,
+    // 33 CORNG, 35 PNBRNG, 37 EGBRNG, 39 WLLML, 3A MCTUN, 3B RNDP, 43 SPTPNT
+    MidiSlider  sliderWPBR, sliderATPBR, sliderPMRNG, sliderAMRNG, sliderFMRNG,
+                sliderPNLRNG, sliderCORNG, sliderPNBRNG, sliderEGBRNG,
+                sliderWLLML, sliderMCTUN, sliderRNDP, sliderSPTPNT;
+    Label       labWPBR  { "WPBR",   "WPBR"   };
+    Label       labATPBR { "ATPBR",  "ATPBR"  };
+    Label       labPMRNG { "PMRNG",  "PMRNG"  };
+    Label       labAMRNG { "AMRNG",  "AMRNG"  };
+    Label       labFMRNG { "FMRNG",  "FMRNG"  };
+    Label       labPNLRNG{ "PNLRNG", "PNLRNG" };
+    Label       labCORNG { "CORNG",  "CORNG"  };
+    Label       labPNBRNG{ "PNBRNG", "PNBRNG" };
+    Label       labEGBRNG{ "EGBRNG", "EGBRNG" };
+    Label       labWLLML { "WLLML",  "WLLML"  };
+    Label       labMCTUN { "MCTUN",  "MCTUN"  };
+    Label       labRNDP  { "RNDP",   "RNDP"   };
+    Label       labSPTPNT{ "SPTPNT", "SPTPNT" };
+    // 2A PMASN, 2C AMASN, 2E FMASN, 30 PNLASN, 32 COASN, 34 PNBASN,
+    // 36 EGBASN, 38 WLASN, 42 AFTMD
+    MidiCombo   comboPMASN, comboAMASN, comboFMASN, comboPNLASN, comboCOASN,
+                comboPNBASN, comboEGBASN, comboWLASN, comboAFTMD;
+    Label       labPMASN { "PMASN",  "PMASN"  };
+    Label       labAMASN { "AMASN",  "AMASN"  };
+    Label       labFMASN { "FMASN",  "FMASN"  };
+    Label       labPNLASN{ "PNLASN", "PNLASN" };
+    Label       labCOASN { "COASN",  "COASN"  };
+    Label       labPNBASN{ "PNBASN", "PNBASN" };
+    Label       labEGBASN{ "EGBASN", "EGBASN" };
+    Label       labWLASN { "WLASN",  "WLASN"  };
+    Label       labAFTMD { "AFTMD",  "AFTMD"  };
+
+    void setupCommonParam (MidiSlider& s, Label& lab, uint8 NN, int lo, int hi)
+    {
+        int sysex[9] = { 0x43, sysexEngine, 0x34, 0x02, 0x00, 0x00, NN, 0x00, 0 };
+        s.setMidiSysex (sysex);
+        s.setRangeAndRound (lo, hi, lo);
+        s.setSliderStyle (Slider::SliderStyle::LinearHorizontal);
+        s.setTextBoxStyle (Slider::TextBoxRight, false, 36, 16);
+        s.setPopupDisplayEnabled (true, true, &commonPanel);
+        commonPanel.addAndMakeVisible (s);
+        lab.setJustificationType (Justification::centredLeft);
+        lab.setColour (Label::textColourId, Colours::darkorange);
+        commonPanel.addAndMakeVisible (lab);
+    }
+    void setupCommonAssign (MidiCombo& c, Label& lab, uint8 NN, int lo, int hi)
+    {
+        int sysex[9] = { 0x43, sysexEngine, 0x34, 0x02, 0x00, 0x00, NN, 0x00, 0 };
+        c.setMidiSysex (sysex);
+        for (int v = lo; v <= hi; ++v)
+            c.addItem (String (v), v + 1); // ID = value+1 to avoid 0
+        commonPanel.addAndMakeVisible (c);
+        lab.setJustificationType (Justification::centredLeft);
+        lab.setColour (Label::textColourId, Colours::darkorange);
+        commonPanel.addAndMakeVisible (lab);
+    }
+    void setupAFTMD()
+    {
+        int sysex[9] = { 0x43, sysexEngine, 0x34, 0x02, 0x00, 0x00, 0x42, 0x00, 0 };
+        comboAFTMD.setMidiSysex (sysex);
+        comboAFTMD.addItem ("all", 1);
+        comboAFTMD.addItem ("top", 2);
+        comboAFTMD.addItem ("btm", 3);
+        comboAFTMD.addItem ("hi",  4);
+        comboAFTMD.addItem ("low", 5);
+        commonPanel.addAndMakeVisible (comboAFTMD);
+        labAFTMD.setJustificationType (Justification::centredLeft);
+        labAFTMD.setColour (Label::textColourId, Colours::darkorange);
+        commonPanel.addAndMakeVisible (labAFTMD);
+    }
+    void buildCommonPanel()
+    {
+        commonPanel.addAndMakeVisible (labelCommon);
+        labelCommon.setJustificationType (Justification::centredTop);
+        labelCommon.setColour (Label::textColourId, Colours::white);
+
+        setupCommonParam (sliderWPBR,   labWPBR,   0x28,   0,  12);
+        setupCommonParam (sliderATPBR,  labATPBR,  0x29, -12,  12);
+        setupCommonAssign (comboPMASN,  labPMASN,  0x2A,   0, 121);
+        setupCommonParam (sliderPMRNG,  labPMRNG,  0x2B,   0, 127);
+        setupCommonAssign (comboAMASN,  labAMASN,  0x2C,   0, 121);
+        setupCommonParam (sliderAMRNG,  labAMRNG,  0x2D,   0, 127);
+        setupCommonAssign (comboFMASN,  labFMASN,  0x2E,   0, 121);
+        setupCommonParam (sliderFMRNG,  labFMRNG,  0x2F,   0, 127);
+        setupCommonAssign (comboPNLASN, labPNLASN, 0x30,   0, 121);
+        setupCommonParam (sliderPNLRNG, labPNLRNG, 0x31,   0, 127);
+        setupCommonAssign (comboCOASN,  labCOASN,  0x32,   0, 121);
+        setupCommonParam (sliderCORNG,  labCORNG,  0x33,   0, 127);
+        setupCommonAssign (comboPNBASN, labPNBASN, 0x34,   0, 121);
+        setupCommonParam (sliderPNBRNG, labPNBRNG, 0x35,   0, 127);
+        setupCommonAssign (comboEGBASN, labEGBASN, 0x36,   0, 121);
+        setupCommonParam (sliderEGBRNG, labEGBRNG, 0x37,   0, 127);
+        setupCommonAssign (comboWLASN,  labWLASN,  0x38,   0, 121);
+        setupCommonParam (sliderWLLML,  labWLLML,  0x39,   0, 127);
+        setupCommonParam (sliderMCTUN,  labMCTUN,  0x3A,   0,  65);
+        setupCommonParam (sliderRNDP,   labRNDP,   0x3B,   0,   7);
+        setupAFTMD();
+        setupCommonParam (sliderSPTPNT, labSPTPNT, 0x43,   0, 127);
+    }
+    void layoutCommonPanel()
+    {
+        // Two columns: label (40px) + control (rest).
+        const int rowH = 18;
+        const int gap  = 2;
+        const int w    = commonPanel.getWidth();
+        const int labW = 56;
+        int y = 0;
+        labelCommon.setBounds (0, y, w, rowH); y += rowH + gap;
+
+        auto place = [&] (Label& l, Component& c)
+        {
+            l.setBounds (0, y, labW, rowH);
+            c.setBounds (labW, y, w - labW, rowH);
+            y += rowH + gap;
+        };
+        place (labWPBR,   sliderWPBR);
+        place (labATPBR,  sliderATPBR);
+        place (labPMASN,  comboPMASN);
+        place (labPMRNG,  sliderPMRNG);
+        place (labAMASN,  comboAMASN);
+        place (labAMRNG,  sliderAMRNG);
+        place (labFMASN,  comboFMASN);
+        place (labFMRNG,  sliderFMRNG);
+        place (labPNLASN, comboPNLASN);
+        place (labPNLRNG, sliderPNLRNG);
+        place (labCOASN,  comboCOASN);
+        place (labCORNG,  sliderCORNG);
+        place (labPNBASN, comboPNBASN);
+        place (labPNBRNG, sliderPNBRNG);
+        place (labEGBASN, comboEGBASN);
+        place (labEGBRNG, sliderEGBRNG);
+        place (labWLASN,  comboWLASN);
+        place (labWLLML,  sliderWLLML);
+        place (labMCTUN,  sliderMCTUN);
+        place (labRNDP,   sliderRNDP);
+        place (labAFTMD,  comboAFTMD);
+        place (labSPTPNT, sliderSPTPNT);
+    }
 
     
     UndoManager undoManager;

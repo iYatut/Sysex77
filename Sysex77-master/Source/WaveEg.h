@@ -75,6 +75,18 @@ public:
         egWave.setModeHold(true);
         egWave.setKeyOffSegment(4);
         egWave.setName("EG AWM Vol");
+
+        // AWM EG R2 E1/E3 — addresses differ between elements so can't use standard
+        // element-offset formula; two separate sliders with hardcoded per-element addresses.
+        addAndMakeVisible(sliderAwmR2E1);
+        labelAwmR2E1.attachToComponent(&sliderAwmR2E1, false);
+        sliderAwmR2E1.setRangeAndRound(0, 62, 0);   // E1: display = raw-1 so max raw = 63 → display 62
+        sliderAwmR2E1.setPopupDisplayEnabled(true, true, this);
+
+        addAndMakeVisible(sliderAwmR2E3);
+        labelAwmR2E3.attachToComponent(&sliderAwmR2E3, false);
+        sliderAwmR2E3.setRangeAndRound(0, 63, 0);   // E3: direct encoding
+        sliderAwmR2E3.setPopupDisplayEnabled(true, true, this);
     }
 
     ~WaveEg()
@@ -283,6 +295,17 @@ public:
         egWave.setReleaseLevel(toPctL(sliderRL2.getValue()));
         egWave.repaint();
 
+        // AWM EG R2 E1 — confirmed: b3=0x07, b4=0x00, b6=0x50; range 0..62 (display=raw-1)
+        // AWM EG R2 E3 — confirmed: b3=0x07, b4=0x40, b6=0x51; range 0..63 direct
+        // Addresses are not derivable from the standard element-offset formula, hence hardcoded.
+        int sysexAwmR2E1[9] = { 0x43, 0x10, 0x34, 0x07, 0x00, 0x00, 0x50, 0x00, 0 };
+        sliderAwmR2E1.setMidiSysex(sysexAwmR2E1);
+        sliderAwmR2E1.setRangeAndRound(0, 62, 0);
+
+        int sysexAwmR2E3[9] = { 0x43, 0x10, 0x34, 0x07, 0x40, 0x00, 0x51, 0x00, 0 };
+        sliderAwmR2E3.setMidiSysex(sysexAwmR2E3);
+        sliderAwmR2E3.setRangeAndRound(0, 63, 0);
+
         // Register Value listeners AFTER referTo()
         sliderL0.getValueObject().addListener(this);
         sliderL1.getValueObject().addListener(this);
@@ -344,6 +367,10 @@ public:
         sliderR4.setBoundsRelative (0.82f, 0.40f, 0.04f, 0.3f);
         sliderRR1.setBoundsRelative(0.87f, 0.40f, 0.04f, 0.3f);
         sliderRR2.setBoundsRelative(0.92f, 0.40f, 0.04f, 0.3f);
+
+        // AWM EG R2 E1/E3 — bottom-right strip between rates and keyDraw
+        sliderAwmR2E1.setBoundsRelative(0.65f, 0.74f, 0.12f, 0.08f);
+        sliderAwmR2E3.setBoundsRelative(0.80f, 0.74f, 0.12f, 0.08f);
     }
 
 private:
@@ -385,6 +412,12 @@ private:
     MidiSlider sliderR4;
     MidiSlider sliderRR1;
     MidiSlider sliderRR2;
+
+    // AWM EG R2 E1/E3 — confirmed addresses differ per element (not formula-derivable)
+    MidiSlider sliderAwmR2E1;
+    MidiSlider sliderAwmR2E3;
+    Label      labelAwmR2E1 {"", "AwmR2 E1"};
+    Label      labelAwmR2E3 {"", "AwmR2 E3"};
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (WaveEg)
 };

@@ -82,7 +82,7 @@ static const String oscVoiceFixe1 = "/77VoiceFixe1";
 static const String oscVoiceFixe2 = "/77VoiceFixe2";
 static const String oscVoiceFixe3 = "/77VoiceFixe3";
 static const String oscVoiceFixe4 = "/77VoiceFixe4";
-static const Array<MidiMessage>    oscMidiMessage;
+static Array<MidiMessage>    oscMidiMessage;
 static const String oscSendMidiMessage = "/77MidiMessage";
 
 static   StringArray  arrayBank;    //la liste des banques
@@ -361,31 +361,33 @@ public:
         addOscListener();
         tabs.setVisible(false);
         tabs.setAlwaysOnTop(true);
-        
-        
+
+
         setSize (732, 520);
         tabs.setCurrentTabIndex(1);
         startTimer (500);
+
+        // THROTTLE DEBOUNCE: wire the flush timer back to this MidiDemo.
+        throttleTimer.owner = this;
     }
     
     ~MidiDemo()
     {
         stopTimer();
-  
-        
+        throttleTimer.stopTimer();
 
         midiInputs .clear();
         midiOutputs.clear();
         keyboardState.removeListener (this);
         btBulk.removeListener(this);
-      
-      
+
+
         midiInputSelector .reset();
         midiOutputSelector.reset();
         comboFoot.removeListener(this);
         comboMod.removeListener(this);
-        
-        
+
+
     }
     
 
@@ -763,8 +765,13 @@ private:
             {
                 memcpy(&data, message.getSysExData(), message.getSysExDataSize());
                 if (data[0] == 0x43 && data[2] == 0x34)
-                    valueSysexIn = make_var_array(data[3], data[4], data[5],
-                                                  data[6], data[7], data[8]);
+                {
+                    // ECHO GUARD: ignore own reflections for 50ms after send
+                    const uint8 incomingAddr[4] = { data[3], data[4], data[5], data[6] };
+                    if (! isRecentEcho (incomingAddr))
+                        valueSysexIn = make_var_array(data[3], data[4], data[5],
+                                                      data[6], data[7], data[8]);
+                }
             }
 
             // "SysEx only" display filter
@@ -808,16 +815,43 @@ public:
     void sendToOutputs (const MidiMessage& msg)
     {
         boolStopReceive = true; //shunt the midi in
-        
+
         for (auto midiOutput : midiOutputs)
             if (midiOutput->outDevice.get() != nullptr)
             {
-                
+
                 midiOutput->outDevice->sendMessageNow (msg);
                 Logger::writeToLog("Envoi msg midi");
                 Logger::writeToLog(String(msg.getDescription()) );
             }
         boolStopReceive = false; //receive unShunt
+    }
+
+    // THROTTLE DEBOUNCE: called by ThrottleFlushTimer when the throttle window
+    // has elapsed and a value is still pending. Sends the most recent suppressed
+    // parameter SysEx and refreshes the throttle/echo timestamps.
+    void flushPendingSysex()
+    {
+        throttleTimer.stopTimer();
+        if (! hasPending)
+            return;
+
+        const juce::uint32 now = juce::Time::getMillisecondCounter();
+        lastSysexSendTime = now;
+
+        // Refresh echo guard with the same address so the (almost immediate)
+        // reflection from MIDI Thru does not bounce back into valueSysexIn.
+        echoGuard[echoGuardIndex].addr[0] = pendingSysex[3];
+        echoGuard[echoGuardIndex].addr[1] = pendingSysex[4];
+        echoGuard[echoGuardIndex].addr[2] = pendingSysex[5];
+        echoGuard[echoGuardIndex].addr[3] = pendingSysex[6];
+        echoGuard[echoGuardIndex].sentAt  = now;
+        echoGuardIndex = (echoGuardIndex + 1) % kEchoGuardSize;
+
+        MidiMessage m = MidiMessage::createSysExMessage (pendingSysex, 9);
+        m.setTimeStamp (Time::getMillisecondCounterHiRes() * 0.001);
+        sendToOutputs (m);
+        hasPending = false;
     }
     
     //==============================================================================
@@ -1012,6 +1046,33 @@ public:
     TextButton btShowRealtime  { "Show realtime" };
     TextButton btShowSysExOnly { "SysEx only" };
     TextButton btClearMonitor  { "Clear" };
+
+    // THROTTLE: 30msg/sec limit — timestamp of the last outgoing parameter SysEx
+    juce::uint32 lastSysexSendTime = 0;
+
+    // THROTTLE DEBOUNCE: one pending suppressed parameter-change SysEx.
+    // If no newer value replaces it within ~33ms, the timer flushes it so the
+    // final slider value still reaches the synth.
+    uint8 pendingSysex[9] {};
+    bool  hasPending = false;
+
+    struct ThrottleFlushTimer : public juce::Timer
+    {
+        MidiDemo* owner = nullptr;
+        void timerCallback() override
+        {
+            if (owner != nullptr)
+                owner->flushPendingSysex();
+        }
+    };
+    ThrottleFlushTimer throttleTimer;
+
+    // ECHO GUARD: ring buffer of recently sent SysEx address bytes [3..6].
+    // Incoming reflections matching one of these within 50ms are ignored.
+    struct EchoEntry { uint8 addr[4]; juce::uint32 sentAt; };
+    static constexpr int kEchoGuardSize = 16;
+    EchoEntry echoGuard[kEchoGuardSize] {};
+    int echoGuardIndex = 0;
 
     //==============================================================================
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MidiDemo)

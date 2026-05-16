@@ -79,6 +79,21 @@ public:
         egPan.setModeHold(true);
         egPan.setKeyOffSegment(4);
         egPan.setName("EG Pan");
+
+        // Pan Source / Source Depth (confirmed addresses 0A NN=00/01).
+        // Source select is an enum 0..2 (Velocity/Note/LFO); depth is 0..127.
+        addAndMakeVisible (comboPanSrc);
+        addAndMakeVisible (labelPanSrc);
+        labelPanSrc.attachToComponent (&comboPanSrc, true);
+        comboPanSrc.addItem ("Velocity", 1);
+        comboPanSrc.addItem ("Note",     2);
+        comboPanSrc.addItem ("LFO",      3);
+
+        addAndMakeVisible (sliderPanSrcDpt);
+        addAndMakeVisible (labelPanSrcDpt);
+        labelPanSrcDpt.attachToComponent (&sliderPanSrcDpt, true);
+        sliderPanSrcDpt.setRangeAndRound (0, 127, 0);
+        sliderPanSrcDpt.setPopupDisplayEnabled (true, true, this);
     }
 
     ~Pan()
@@ -351,6 +366,19 @@ public:
         egPan.setRelease (toPctR63 (sliderRR2.getValue()));
         egPan.setReleaseLevel (toPctL (sliderRL2.getValue()));
 
+        // Pan Source select (0A NN=00): MidiCombo for Velocity/Note/LFO
+        applyElem (sysexRate);
+        sysexRate[3] = 0x0A;
+        sysexRate[6] = 0x00;
+        comboPanSrc.setMidiSysex (sysexRate);
+
+        // Pan Source Depth (0A NN=01): MidiSlider 0..127
+        applyElem (sysexRate);
+        sysexRate[3] = 0x0A;
+        sysexRate[6] = 0x01;
+        sliderPanSrcDpt.setMidiSysex (sysexRate);
+        sliderPanSrcDpt.setRangeAndRound (0, 127, 0);
+
         // Apply HT and SLP to the EG visualisation
         egPan.setHoldTime ((int)sliderHT.getValue());
         egPan.setLoopPoint((int)sliderSLP.getValue() + 1);
@@ -399,6 +427,12 @@ public:
         // HT and SLP sliders in the bottom control strip
         sliderHT.setBoundsRelative (0.65f, 0.85f, 0.08f, 0.08f);
         sliderSLP.setBoundsRelative(0.75f, 0.85f, 0.08f, 0.08f);
+
+        // Pan Source (combo) + Source Depth (slider) — bottom-right strip.
+        // labelPanSrc / labelPanSrcDpt attach themselves to the control's left
+        // edge via attachToComponent(..., true), so leave a small margin.
+        comboPanSrc.setBoundsRelative      (0.85f, 0.85f, 0.07f, 0.05f);
+        sliderPanSrcDpt.setBoundsRelative  (0.93f, 0.85f, 0.07f, 0.05f);
 
         // Levels (top row): L0..L4 | RL1, RL2
         sliderL0.setBoundsRelative (0.65f, 0.06f, 0.04f, 0.3f);
@@ -457,6 +491,12 @@ private:
     MidiSlider sliderR4;
     MidiSlider sliderRR1;
     MidiSlider sliderRR2;
+
+    // Pan Source (0A 00) + Source Depth (0A 01) — confirmed addresses.
+    MidiCombo  comboPanSrc;
+    MidiSlider sliderPanSrcDpt;
+    Label      labelPanSrc    { "", "Src" };
+    Label      labelPanSrcDpt { "", "Dpt" };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (Pan)
 };

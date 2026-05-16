@@ -180,10 +180,13 @@ void oscMessageReceived (const OSCMessage& message) override
     }
     if (address.matches ( oscSendMidiMessage))
     {
+        // VNAM*: send the prepared array of per-character SysEx messages.
+        // OSC arg = count of messages stored in oscMidiMessage[].
         if (message.size() == 1 && message[0].isInt32())
         {
-            for(auto i = 0 ; 0 == message[0].getInt32(); i++)
-                 sendToOutputs (oscMidiMessage[i]);
+            const int count = message[0].getInt32();
+            for (int i = 0; i < count && i < oscMidiMessage.size(); ++i)
+                sendToOutputs (oscMidiMessage[i]);
         }
     }
     if (address.matches(adresseOscSendBank))
@@ -204,13 +207,58 @@ void sendSysex(const OSCMessage& message, uint8 sysexdata[0])
     if (message.size() == 1 && message[0].isInt32())
     {
         //     Logger::writeToLog("Foot " + String( message[0].getInt32()));
-        
+
         sysexdata[8] = message[0].getInt32();
+
+        // THROTTLE: 30msg/sec limit (~33ms spacing) for parameter-change SysEx.
+        // When suppressed, the value is queued; a 35ms one-shot timer flushes
+        // the most recent suppressed value if no newer one replaces it (so the
+        // final slider position still reaches the synth).
+        const juce::uint32 now = juce::Time::getMillisecondCounter();
+        if (now - lastSysexSendTime < 33)
+        {
+            for (int i = 0; i < 9; ++i)
+                pendingSysex[i] = sysexdata[i];
+            hasPending = true;
+            // Restart the timer so each new suppressed value extends the wait;
+            // when the user stops dragging, the timer fires and sends the last value.
+            throttleTimer.startTimer (35);
+            return;
+        }
+        lastSysexSendTime = now;
+        hasPending = false;
+        throttleTimer.stopTimer();
+
+        // ECHO GUARD: remember address [3..6] so the inbound reflection within 50ms is ignored
+        echoGuard[echoGuardIndex].addr[0] = sysexdata[3];
+        echoGuard[echoGuardIndex].addr[1] = sysexdata[4];
+        echoGuard[echoGuardIndex].addr[2] = sysexdata[5];
+        echoGuard[echoGuardIndex].addr[3] = sysexdata[6];
+        echoGuard[echoGuardIndex].sentAt  = now;
+        echoGuardIndex = (echoGuardIndex + 1) % kEchoGuardSize;
+
         MidiMessage m = MidiMessage::createSysExMessage(sysexdata, 9);
         m.setTimeStamp (Time::getMillisecondCounterHiRes() * 0.001);
         sendToOutputs (m);
     }
-    
+
+}
+
+// ECHO GUARD: returns true if the incoming SysEx [3..6] matches a recently sent address
+bool isRecentEcho (const uint8 incoming[4])
+{
+    const juce::uint32 now = juce::Time::getMillisecondCounter();
+    for (int i = 0; i < kEchoGuardSize; ++i)
+    {
+        if (now - echoGuard[i].sentAt > 50)
+            continue;
+        if (echoGuard[i].addr[0] == incoming[0]
+            && echoGuard[i].addr[1] == incoming[1]
+            && echoGuard[i].addr[2] == incoming[2]
+            && echoGuard[i].addr[3] == incoming[3])
+            return true;
+    }
+    return false;
 }
 void sendRaw(const void* sysexData, const long dataSize)
 {

@@ -35,4 +35,26 @@ VC_M_AFTMD,Voice Common Data,02000042,AFTMD,,,enum,Common,Zoned AfterTouch mode:
 VC_M_SPTPNT,Voice Common Data,02000043,SPTPNT,0,127,MIDI_7bit,Common,Zoned AfterTouch split point,manual
 OBS_IMPL_00,Voice Common Data,02000000,ELMODE_impl_code,0,9,index,Common,VoicePage comboMode; MidiSysex adresseOpMode — UI indices 0-9 for 10 modes; compare to manual ELMODE 0-10,observed
 OBS_IMPL_3F,Voice Common Data,0200003F,WOL_impl_code,0,127,MIDI_7bit,Common,sliderMaster + oscTotalVoiceVolume; aligns with manual NN=3F WOL,observed
+PAN_E1_PNSCSEL,Pan EG (Element 1),0A000000,PNSCSEL,0,2,enum,E1,Pan Source select: 0=Velocity 1=Note 2=LFO (09_confirmed_addresses.md),code
+PAN_E1_PNSCDPT,Pan EG (Element 1),0A000001,PNSCDPT,0,127,MIDI_7bit,E1,Pan Source Depth (RECORDED 7F..00 = 128 messages),code
+PAN_E1_HT,Pan EG (Element 1),0A000002,PAN_HT,0,63,MIDI_7bit,E1,Pan EG Hold Time (Pan.h sliderHT),code
+PAN_E1_R1,Pan EG (Element 1),0A000003,PAN_R1,0,63,MIDI_7bit,E1,Pan EG Rate R1 (Pan.h sliderR1),code
+PAN_E1_R2,Pan EG (Element 1),0A000004,PAN_R2,0,63,MIDI_7bit,E1,Pan EG Rate R2,code
+PAN_E1_R3,Pan EG (Element 1),0A000005,PAN_R3,0,63,MIDI_7bit,E1,Pan EG Rate R3,code
+PAN_E1_R4,Pan EG (Element 1),0A000006,PAN_R4,0,63,MIDI_7bit,E1,Pan EG Rate R4,code
+PAN_E1_RR1,Pan EG (Element 1),0A000007,PAN_RR1,0,63,MIDI_7bit,E1,Pan EG Release Rate 1,code
+PAN_E1_RR2,Pan EG (Element 1),0A000008,PAN_RR2,0,63,MIDI_7bit,E1,Pan EG Release Rate 2,code
+PAN_E1_L0,Pan EG (Element 1),0A000009,PAN_L0,-32,31,signed,E1,Pan EG Level L0 (raw 0..3F display raw-0x20),code
+PAN_E1_L1,Pan EG (Element 1),0A00000A,PAN_L1,-32,31,signed,E1,Pan EG Level L1,code
+PAN_E1_L2,Pan EG (Element 1),0A00000B,PAN_L2,-32,31,signed,E1,Pan EG Level L2,code
+PAN_E1_L3,Pan EG (Element 1),0A00000C,PAN_L3,-32,31,signed,E1,Pan EG Level L3,code
+PAN_E1_L4,Pan EG (Element 1),0A00000D,PAN_L4,-32,31,signed,E1,Pan EG Level L4,code
+PAN_E1_RL1,Pan EG (Element 1),0A00000E,PAN_RL1,-32,31,signed,E1,Pan EG Release Level 1,code
+PAN_E1_RL2,Pan EG (Element 1),0A00000F,PAN_RL2,-32,31,signed,E1,Pan EG Release Level 2,code
+PAN_E1_SLP,Pan EG (Element 1),0A000010,PAN_SLP,0,3,enum,E1,Pan EG SLP S1..S4 (Pan.h sliderSLP),code
+AFM_E1_R1,AFM Operator EG (Element 1),56000000,AFM_R1,0,63,MIDI_7bit,E1,AFM Operator EG Rate R1 (CONFIRMED 09_confirmed_addresses.md),manual
+AFM_E1_R2,AFM Operator EG (Element 1),56000001,AFM_R2,0,63,MIDI_7bit,E1,AFM Operator EG Rate R2,manual
+AFM_E1_HT,AFM Operator EG (Element 1),5600000D,AFM_HT,0,63,MIDI_7bit,E1,AFM Operator EG Hold Time,manual
+AWM_E1_R2,AWM Element EG (Element 1),07000050,AWM_R2_E1,0,62,MIDI_7bit,E1,AWM Element EG R2 E1 (display = raw - 1; CONFIRMED),manual
+AWM_E3_R2,AWM Element EG (Element 3),07400051,AWM_R2_E3,0,63,MIDI_7bit,E3,AWM Element EG R2 E3 (b4=40 b6=51; CONFIRMED),manual
 ZZ00,_workspace_notice,00000000,_reference_files_,,,meta,N/A,Primary transcription: _agent_context/sy99_sysex_complete.md (user-supplied). SY99E2.PDF link in SY99E2_reference.txt,manual

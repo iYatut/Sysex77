@@ -1,4 +1,4 @@
-# SY99 Editor — Agent Specification
+﻿# SY99 Editor — Agent Specification
 
 Главная точка входа для агента: прочитать этот файл первым, затем **`02_sysex_format.md`**, **`01_code_map.md`**, **`03_parameter_map.csv`**, **`05_missing_audit.md`**, **`sy99_sysex_complete.md`**, при работе с логами — **`04_observed_logs.md`** и **`Sysex77-master/Source/MIDI_MAP_OBSERVATIONS.md`**.
 
@@ -56,14 +56,15 @@ Derived from **`03_parameter_map.csv`** and **`05_missing_audit.md`** (snapshot;
 
 | Metric | Value |
 |--------|-------|
-| **Total rows in `03_parameter_map.csv` (excl. header)** | **37** |
-| **Tracked SY99-ish rows excluding meta `ZZ00`** | **36** |
+| **Total rows in `03_parameter_map.csv` (excl. header)** | **59** (37 baseline + 17 Pan EG `0A` + 3 AFM `0x56` + 2 AWM `0x07`) |
+| **Tracked SY99-ish rows excluding meta `ZZ00`** | **58** |
 | **Manual Voice Common params in CSV (`source=manual`, excl. `ZZ00`)** | **34** |
-| **Implemented (send): rows in audit with ✅ in send column** | **14** |
-| **Implemented (receive): rows with full ✅ send + ✅ receive** | **11** |
+|| **Implemented (send): rows in audit with ✅ in send column** | **43** (включая AFM Op EG R1/R2/HT + AWM R2 E1/E3 — Prompt #8) |
+|| **Implemented (receive): rows with full ✅ send + ✅ receive** | **42** (Voice Common + Pan EG + AFM Op EG + AWM R2 — Prompt #8) |
 | **Partial receive (audit)** | **1** (`Hook`/Pan graph: ✅ / ⚠️) |
-| **Missing UI (Voice Common CSV rows with ❌ send)** | **18** (addresses `02 00 00 28`–`3B`, `42`, `43`) |
-| **Other gaps** | **ELMODE**: ✅ send / ❌ receive; **VNAM\***: ⚠️ send / ❌ receive (broken `oscSendMidiMessage` loop per `01_code_map.md`) |
+| **Missing UI (Voice Common CSV rows with ❌ send)** | **0** — все 22 параметра `02 00 00 28..43` имеют UI (commonPanel в Voice.h) |
+|| **Outstanding TODOs** | Все AFM Op EG R1/R2/HT (Prompt #8) и AWM R2 E1/E3 (Prompt #8) реализованы. Следующие приоритеты — per-operator AFM EG (6 op × 4 elem) и AWM EG R1/R3/R4. |
+| **Realtime safety** | Throttle 30 msg/s + debounce (`ThrottleFlushTimer`) + echo guard 50 мс — `MidiSysex.h`/`MidiDemo.h`. |
 
 Interpretation: Pan EG and related controls are implemented in code but **not** listed as separate rows in `03_parameter_map.csv`; the audit adds them explicitly.
 
@@ -79,8 +80,8 @@ Interpretation: Pan EG and related controls are implemented in code but **not** 
 - Do **not** refactor existing working code unless needed for the requested change; prefer minimal patches (`user_rules`).
 - Do **not** add new **npm** packages without approval — **N/A** today (no Node project); same intent for new heavy dependencies in JUCE/CMake if introduced later.
 - Prefer **parameter-change SysEx** during edits; avoid spamming **full bulk** dumps for routine slider moves (library `sendRaw` is for intentional bank transfers).
-- **Throttling:** target **≤ 30 parameter messages/sec** during continuous drag (encoder scrub); not centrally enforced today — implement carefully if adding burst sends.
-- **Echo guard:** ignore reflected **own** SysEx for **~50 ms** after send when MIDI Thru/loopback can feed the input (not implemented globally — document when adding).
+- **Throttling:** target **≤ 30 parameter messages/sec** during continuous drag (encoder scrub) — enforced in `MidiSysex.h::sendSysex` (33 ms интервал, `lastSysexSendTime`). Финальное значение слайдера никогда не теряется: подавленный SysEx сохраняется в `pendingSysex[9]`, `ThrottleFlushTimer` (35 мс one-shot) дотягивает его до синта, если новое значение не пришло. Прямые вызовы `sendToOutputs` (bulk-кнопка, VNAM-пакет) пропускают throttle намеренно.
+- **Echo guard:** ignore reflected **own** SysEx for **~50 ms** after send — реализовано в `MidiDemo.h::handleAsyncUpdate` через кольцевой буфер `echoGuard[16]` и `isRecentEcho()`; обновление `valueSysexIn` блокируется, если адрес `[3..6]` совпал с недавним отправленным. `flushPendingSysex()` тоже регистрирует адрес.
 - **Do NOT read `MIDI_MAP_OBSERVATIONS.md` directly** when deriving addresses for code or CSV. Use **`_agent_context/09_confirmed_addresses.md`** — a pre-filtered extract containing only CONFIRMED / post-fix RECORDED sections. The raw file contains legacy addresses (`0x03`/`07`, `0x07`/`06`) and archive dumps that predate the MidiDemo buffer fix and will produce wrong mappings.
 
 ## Deliverables expected from agent

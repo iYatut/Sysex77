@@ -38,7 +38,26 @@ public:
         labelAlgo.attachToComponent(&sliderAlgo, false);
 
         setAlgorythm();
-        
+
+        // AFM Op EG sliders — block 0x56, b4 updated per element in setElementNumber.
+        // b6 = 0x00 (R1), 0x01 (R2), 0x0D (HT) per 09_confirmed_addresses.md.
+        int sysexAfm[9] = { 0x43, 0x10, 0x34, 0x56, 0x00, 0x00, 0x00, 0x00, 0 };
+        sliderAfmR1.setMidiSysex(sysexAfm);
+        sliderAfmR1.setRangeAndRound(0, 63, 0);
+        addAndMakeVisible(sliderAfmR1);
+        labelAfmR1.attachToComponent(&sliderAfmR1, false);
+
+        sysexAfm[6] = 0x01;
+        sliderAfmR2.setMidiSysex(sysexAfm);
+        sliderAfmR2.setRangeAndRound(0, 63, 0);
+        addAndMakeVisible(sliderAfmR2);
+        labelAfmR2.attachToComponent(&sliderAfmR2, false);
+
+        sysexAfm[6] = 0x0D;
+        sliderAfmHT.setMidiSysex(sysexAfm);
+        sliderAfmHT.setRangeAndRound(0, 63, 0);
+        addAndMakeVisible(sliderAfmHT);
+        labelAfmHT.attachToComponent(&sliderAfmHT, false);
     }
     
     ~Operator()
@@ -72,7 +91,14 @@ public:
         sysexdata[4] = 0x60;
         }
         sliderAlgo.setMidiSysex(sysexdata);
-        
+
+        // Update element offset (b4) for AFM Op EG sliders using the same offset.
+        int sysexAfm[9] = { 0x43, 0x10, 0x34, 0x56, sysexdata[4], 0x00, 0x00, 0x00, 0 };
+        sliderAfmR1.setMidiSysex(sysexAfm);
+        sysexAfm[6] = 0x01;
+        sliderAfmR2.setMidiSysex(sysexAfm);
+        sysexAfm[6] = 0x0D;
+        sliderAfmHT.setMidiSysex(sysexAfm);
     }
     
     void setAlgorythm()
@@ -107,6 +133,11 @@ public:
         // components that your component contains..
         algoFm.setBoundsRelative(0.01f, 0.15f, 0.4f, 0.84f);
         sliderAlgo.setBoundsRelative(0.01f, 0.06f, 0.4f, 0.08f);
+
+        // AFM Op EG R1/R2/HT — right column, unused space beside algo diagram
+        sliderAfmR1.setBoundsRelative(0.45f, 0.20f, 0.06f, 0.55f);
+        sliderAfmR2.setBoundsRelative(0.55f, 0.20f, 0.06f, 0.55f);
+        sliderAfmHT.setBoundsRelative(0.65f, 0.20f, 0.06f, 0.55f);
         repaint();
     }
     
@@ -114,5 +145,13 @@ private:
     AlgoDraw algoFm;
     MidiSlider sliderAlgo;
     Label labelAlgo { "algo", TRANS("AFM Algorithm")};
+
+    // AFM Op EG — block 0x56, element-aware (b4 set in setElementNumber)
+    MidiSlider sliderAfmR1;
+    MidiSlider sliderAfmR2;
+    MidiSlider sliderAfmHT;
+    Label labelAfmR1 {"", "AfmR1"};
+    Label labelAfmR2 {"", "AfmR2"};
+    Label labelAfmHT {"", "AfmHT"};
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (Operator)
 };
