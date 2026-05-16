@@ -98,6 +98,7 @@ public:
 
     ~Pan()
     {
+        valueSysexIn.removeListener(this);
         sliderHT.removeListener(this);
         sliderSLP.removeListener(this);
         sliderL0.getValueObject().removeListener(this);
@@ -227,8 +228,63 @@ public:
         });
     }
 
-    void valueChanged(Value& /*v*/) override
+    void valueChanged(Value& value) override
     {
+        // Incoming SysEx graph sync (block 0x0A): update egPan segments / HT / SLP
+        // directly from the parameter-change message without re-sending. Slider
+        // values themselves are updated by MidiSlider::valueChanged via valueSysexIn;
+        // here we keep the graphical EG mirror in step for addresses 0A [elem] 00 03..0F
+        // even when no MidiSlider listener fires (e.g. release-level fast paths).
+        if (value.refersToSameSourceAs (valueSysexIn))
+        {
+            auto incoming = value.getValue();
+            const int b3 = (int) incoming[0];
+            const int b4 = (int) incoming[1];
+            const int b5 = (int) incoming[2];
+            const int b6 = (int) incoming[3];
+            const int b8 = (int) incoming[5];
+
+            if (b3 != 0x0A || b5 != 0x00) return;
+            if (b4 != elementOffset) return; // only react to the element this Pan edits
+
+            if (egPan.getSegmentCount() < 6) return;
+
+            const bool wasUpdating = isUpdating;
+            isUpdating = true;
+
+            // Rates: hardware raw 0..63 → percentage 0..100 with inversion (see toPctR)
+            auto toPctR = [](int v) { return (int) ((64.0 - (double) v) * 100.0 / 64.0); };
+            // Levels: hardware raw 0..63 → signed -32..+31 → percentage 0..100 (see toPctL)
+            auto toPctL = [](int v) { return (int) (((double) v - 32.0 + 32.0) * 100.0 / 64.0); };
+
+            switch (b6)
+            {
+                case 0x02: egPan.setHoldTime (b8); break;                     // HT
+                case 0x03: egPan.setSegmentRate (0, toPctR (b8)); break;      // R1
+                case 0x04: egPan.setSegmentRate (1, toPctR (b8)); break;      // R2
+                case 0x05: egPan.setSegmentRate (2, toPctR (b8)); break;      // R3
+                case 0x06: egPan.setSegmentRate (3, toPctR (b8)); break;      // R4
+                case 0x07: egPan.setSegmentRate (4, toPctR (b8)); break;      // RR1
+                case 0x08:                                                    // RR2
+                    egPan.setSegmentRate (5, toPctR (b8));
+                    egPan.setRelease    (toPctR (b8));
+                    break;
+                case 0x09: egPan.setSegmentLevel (0, toPctL (b8)); break;     // L0
+                case 0x0A: egPan.setSegmentLevel (1, toPctL (b8)); break;     // L1
+                case 0x0B: egPan.setSegmentLevel (2, toPctL (b8)); break;     // L2
+                case 0x0C: egPan.setSegmentLevel (3, toPctL (b8)); break;     // L3
+                case 0x0D: egPan.setSegmentLevel (4, toPctL (b8)); break;     // L4
+                case 0x0E: egPan.setSegmentLevel (5, toPctL (b8)); break;     // RL1
+                case 0x0F: egPan.setReleaseLevel (toPctL (b8)); break;        // RL2
+                case 0x10: egPan.setLoopPoint (b8 + 1); break;                // SLP
+                default:   isUpdating = wasUpdating; return;
+            }
+
+            egPan.repaint();
+            isUpdating = wasUpdating;
+            return;
+        }
+
         if (isUpdating) return;
         syncSegmentsFromSliders();
         egPan.repaint();
@@ -246,6 +302,13 @@ public:
         if      (element == 2) elemOffset = 0x20;
         else if (element == 3) elemOffset = 0x40;
         else if (element == 4) elemOffset = 0x60;
+        elementOffset = elemOffset;
+
+        // Remove before re-adding to prevent duplicate registrations when
+        // setElementNumber is called multiple times (Value::addListener is NOT
+        // idempotent — same listener accumulates in ListenerList).
+        valueSysexIn.removeListener (this);
+        valueSysexIn.addListener (this);
 
         auto applyElem = [&elemOffset](int templ[9])
         {
@@ -454,6 +517,7 @@ public:
 
 private:
     bool isUpdating = false;
+    int  elementOffset = 0; // b4 of the current Pan element (0x00/0x20/0x40/0x60)
     SADSR egPan;
 
     MidiKeyDraw keyDraw;

@@ -16,6 +16,7 @@ void addOscListener ()
     addListener (this, adresseOscMod);
     addListener(this, adresseOpMode);
     addListener(this, adresseOscSendBank);
+    addListener (this, adresseOscSendVoice); // [LIBSYNC]
     addListener(this,adresseOscRepaint);
     addListener(this, oscTotalVoiceVolume);
 
@@ -198,7 +199,43 @@ void oscMessageReceived (const OSCMessage& message) override
             const uint8* const data = (const uint8*) mb.getData();
             sendRaw(data, mb.getSize());
         }
-        
+    }
+    if (address.matches (adresseOscSendVoice))
+    {
+        // Args: bank file name (String), voice index 0..63 — send one parsed F0..F7 frame.
+        if (message.size() < 2)
+            return;
+        if (! message[0].isString() || ! message[1].isInt32())
+            return;
+
+        const String fileName = message[0].getString();
+        const int idx = message[1].getInt32();
+        if (idx < 0)
+            return;
+        if (idx >= voiceSysexFileOffsets.size() || idx >= voiceSysexFileLengths.size())
+        {
+            Logger::writeToLog ("[LIBSYNC] /77SendVoice: voice index out of range; bank not parsed?");
+            return;
+        }
+
+        File file { appDirPath.getFullPathName() + "/" + fileName };
+        MemoryBlock mb;
+        if (! file.loadFileAsData (mb))
+        {
+            Logger::writeToLog ("[LIBSYNC] /77SendVoice: failed to load " + file.getFullPathName());
+            return;
+        }
+
+        const int offset = voiceSysexFileOffsets[idx];
+        const int length = voiceSysexFileLengths[idx];
+        if (offset < 0 || length <= 0 || (size_t) (offset + length) > mb.getSize())
+        {
+            Logger::writeToLog ("[LIBSYNC] /77SendVoice: stale offset/length vs current file");
+            return;
+        }
+
+        const uint8* framePtr = (const uint8*) mb.getData();
+        sendRaw (framePtr + offset, (size_t) length);
     }
     //        rotaryKnob.setValue (jlimit (0.0f, 10.0f, message[0].getFloat32())); // [6]
 }

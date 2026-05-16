@@ -56,22 +56,23 @@ Derived from **`03_parameter_map.csv`** and **`05_missing_audit.md`** (snapshot;
 
 | Metric | Value |
 |--------|-------|
-| **Total rows in `03_parameter_map.csv` (excl. header)** | **59** (37 baseline + 17 Pan EG `0A` + 3 AFM `0x56` + 2 AWM `0x07`) |
-| **Tracked SY99-ish rows excluding meta `ZZ00`** | **58** |
+| **Total rows in `03_parameter_map.csv` (excl. header)** | **183** (расширение групп `03`/`05`/`07`/`08`, см. Prompt #11) |
+| **Tracked SY99-ish rows excluding meta `ZZ00`** | **182** |
 | **Manual Voice Common params in CSV (`source=manual`, excl. `ZZ00`)** | **34** |
-|| **Implemented (send): rows in audit with ✅ in send column** | **43** (включая AFM Op EG R1/R2/HT + AWM R2 E1/E3 — Prompt #8) |
-|| **Implemented (receive): rows with full ✅ send + ✅ receive** | **42** (Voice Common + Pan EG + AFM Op EG + AWM R2 — Prompt #8) |
-| **Partial receive (audit)** | **1** (`Hook`/Pan graph: ✅ / ⚠️) |
+| **Implemented (send): rows in audit with ✅ in send column** | **50** (+ AWM Amp EG remap в `WaveEg.h` — Prompt #12) |
+| **Implemented (receive): rows with full ✅ send + ✅ receive** | **49** (+ Amp EG блок кроме частичных ⚠️) |
+| **Partial receive (audit)** | **1** (`WaveEg.h`: `sliderSlope`/PARS ⚠️ приём; Hook drag всё ещё шлёт legacy шаблоны) |
 | **Missing UI (Voice Common CSV rows with ❌ send)** | **0** — все 22 параметра `02 00 00 28..43` имеют UI (commonPanel в Voice.h) |
-|| **Outstanding TODOs** | Все AFM Op EG R1/R2/HT (Prompt #8) и AWM R2 E1/E3 (Prompt #8) реализованы. Следующие приоритеты — per-operator AFM EG (6 op × 4 elem) и AWM EG R1/R3/R4. |
+| **Outstanding TODOs** | Prompt #12: библиотека (Import/Export/RequestVoice). **LIBSYNC** (патчи `sysex77_library_patch_sync_increment.patch` ≡ `sysex77_full_with_library_sync.patch`): уже в коде — см. `05_missing_audit` § Library ↔ Voice sync. Amp EG remap — основные rate/level; TODO — Hook→канон, L0/L1/L4/RL1/RL2, bulk→полный UI. |
 | **Realtime safety** | Throttle 30 msg/s + debounce (`ThrottleFlushTimer`) + echo guard 50 мс — `MidiSysex.h`/`MidiDemo.h`. |
+| **Library sync [LIBSYNC]** | Парсинг кадров `F0…F7`, `/77SendVoice`, зеркало имени в Voice — см. код + `05_missing_audit.md`; полный bulk→параметрический UI — нет. |
 
 Interpretation: Pan EG and related controls are implemented in code but **not** listed as separate rows in `03_parameter_map.csv`; the audit adds them explicitly.
 
 ## Non-Goals (do NOT implement in this session)
 
 - Parity feature-complete **TG77/SY77** SysEx maps (different products; `DeviceModel` mentions them but focus here is **SY99**)
-- Production-grade **bulk dump/restore** editor UX (library path exists — treat as separate milestone)
+- Production-grade **bulk dump/restore** editor UX (library: per-slot SEND + имя синхронизированы — полный bulk→виджеты всё ещё отдельная задача)
 - **MIDI file** playback / sequencing
 - **Audio preview** / internal synth (editor + hardware SY99 only)
 

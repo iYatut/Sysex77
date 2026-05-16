@@ -55,6 +55,130 @@ PAN_E1_SLP,Pan EG (Element 1),0A000010,PAN_SLP,0,3,enum,E1,Pan EG SLP S1..S4 (Pa
 AFM_E1_R1,AFM Operator EG (Element 1),56000000,AFM_R1,0,63,MIDI_7bit,E1,AFM Operator EG Rate R1 (CONFIRMED 09_confirmed_addresses.md),manual
 AFM_E1_R2,AFM Operator EG (Element 1),56000001,AFM_R2,0,63,MIDI_7bit,E1,AFM Operator EG Rate R2,manual
 AFM_E1_HT,AFM Operator EG (Element 1),5600000D,AFM_HT,0,63,MIDI_7bit,E1,AFM Operator EG Hold Time,manual
-AWM_E1_R2,AWM Element EG (Element 1),07000050,AWM_R2_E1,0,62,MIDI_7bit,E1,AWM Element EG R2 E1 (display = raw - 1; CONFIRMED),manual
+AWM_E1_R2,AWM Element EG (Element 1),07000050,AWM_R2_E1,0,62,MIDI_7bit,E1,DEPRECATED — same offset as AWM_E1_PARI (Attack Rate per manual); display = raw - 1; CONFIRMED,manual
 AWM_E3_R2,AWM Element EG (Element 3),07400051,AWM_R2_E3,0,63,MIDI_7bit,E3,AWM Element EG R2 E3 (b4=40 b6=51; CONFIRMED),manual
+NE_E1_ELVL,Normal Voice Element (Element 1),03000000,ELVL,0,127,MIDI_7bit,E1,Element Level (E2..E4: b4=20/40/60),manual
+NE_E1_ELDT,Normal Voice Element (Element 1),03000001,ELDT,-7,7,signed,E1,Element Detune,manual
+NE_E1_ELNS,Normal Voice Element (Element 1),03000002,ELNS,-64,63,signed,E1,Element Note Shift,manual
+NE_E1_ENLL,Normal Voice Element (Element 1),03000003,ENLL,0,127,MIDI_7bit,E1,Element Note Limit Low,manual
+NE_E1_ENLH,Normal Voice Element (Element 1),03000004,ENLH,0,127,MIDI_7bit,E1,Element Note Limit High,manual
+NE_E1_EVLL,Normal Voice Element (Element 1),03000005,EVLL,0,127,MIDI_7bit,E1,Element Velocity Limit Low,manual
+NE_E1_EVLH,Normal Voice Element (Element 1),03000006,EVLH,0,127,MIDI_7bit,E1,Element Velocity Limit High,manual
+NE_E1_PANNM,Normal Voice Element (Element 1),03000007,PANNM,0,31,index,E1,PAN data set table select,manual
+NE_E1_MCTEN,Normal Voice Element (Element 1),03000008,MCTEN_OUTSEL,,,bits,E1,Micro Tuning enable + Output select (bit-packed; see manual),manual
+NE_E1_EFLN1EL,Normal Voice Element (Element 1),0300000A,EFLN1EL,,,bits,E1,Effect send lines 1-4 select (bit-packed),manual
+NE_E1_EFSDLV,Normal Voice Element (Element 1),0300000B,EFSDLV,0,127,MIDI_7bit,E1,Effect send level,manual
+NE_E1_EFSDVL,Normal Voice Element (Element 1),0300000C,EFSDVL,-7,7,signed,E1,Effect send velocity sense,manual
+AFMC_E1_ALGNUM,AFM Element Common (Element 1),05000000,ALGNUM,0,44,index,E1,AFM Algorithm number,manual
+AFMC_E1_FPR1,AFM Element Common (Element 1),05000001,FPR1,0,63,MIDI_7bit,E1,AFM Pitch EG Rate 1,manual
+AFMC_E1_FPR2,AFM Element Common (Element 1),05000002,FPR2,0,63,MIDI_7bit,E1,AFM Pitch EG Rate 2,manual
+AFMC_E1_FPR3,AFM Element Common (Element 1),05000003,FPR3,0,63,MIDI_7bit,E1,AFM Pitch EG Rate 3,manual
+AFMC_E1_FPRR1,AFM Element Common (Element 1),05000004,FPRR1,0,63,MIDI_7bit,E1,AFM Pitch EG key off Rate 1,manual
+AFMC_E1_FPL0,AFM Element Common (Element 1),05000005,FPL0,-64,63,signed,E1,AFM Pitch EG Level 0,manual
+AFMC_E1_FPL1,AFM Element Common (Element 1),05000006,FPL1,-64,63,signed,E1,AFM Pitch EG Level 1,manual
+AFMC_E1_FPL2,AFM Element Common (Element 1),05000007,FPL2,-64,63,signed,E1,AFM Pitch EG Level 2,manual
+AFMC_E1_FPL3,AFM Element Common (Element 1),05000008,FPL3,-64,63,signed,E1,AFM Pitch EG Level 3,manual
+AFMC_E1_FPRL1,AFM Element Common (Element 1),05000009,FPRL1,-64,63,signed,E1,AFM Pitch EG key off Level 1,manual
+AFMC_E1_FPEGR,AFM Element Common (Element 1),0500000A,FPEGR,0,3,index,E1,AFM Pitch EG Range,manual
+AFMC_E1_FPRS,AFM Element Common (Element 1),0500000B,FPRS,0,7,index,E1,AFM Pitch EG Rate Scaling,manual
+AFMC_E1_FVPSW,AFM Element Common (Element 1),0500000C,FVPSW,0,1,bool,E1,AFM Velocity Switch (off/on),manual
+AFMC_E1_FLFSPD,AFM Element Common (Element 1),0500000D,FLFSPD,0,99,MIDI_7bit,E1,AFM Main LFO Speed,manual
+AFMC_E1_FLFDLY,AFM Element Common (Element 1),0500000E,FLFDLY,0,99,MIDI_7bit,E1,AFM Main LFO Delay,manual
+AFMC_E1_FLFPMD,AFM Element Common (Element 1),0500000F,FLFPMD,0,127,MIDI_7bit,E1,AFM Main LFO Pitch Mod Depth,manual
+AFMC_E1_FLFAMD,AFM Element Common (Element 1),05000010,FLFAMD,0,127,MIDI_7bit,E1,AFM Main LFO Amp Mod Depth,manual
+AFMC_E1_FLFFMD,AFM Element Common (Element 1),05000011,FLFFMD,0,127,MIDI_7bit,E1,AFM Main LFO Filter Mod Depth,manual
+AFMC_E1_FLFWAV,AFM Element Common (Element 1),05000012,FLFWAV,0,5,enum,E1,AFM Main LFO Wave,manual
+AFMC_E1_FLINTP,AFM Element Common (Element 1),05000013,FLINTP,0,99,MIDI_7bit,E1,AFM Main LFO Initial Phase,manual
+AFMC_E1_SLFWD,AFM Element Common (Element 1),05000015,SLFWD,0,3,enum,E1,AFM Sub LFO Wave,manual
+AFMC_E1_SLFS,AFM Element Common (Element 1),05000016,SLFS,0,127,MIDI_7bit,E1,AFM Sub LFO Speed,manual
+AFMC_E1_SLFDM,AFM Element Common (Element 1),05000017,SLFDM,,,enum,E1,AFM Sub LFO delay/decay mode,manual
+AFMC_E1_SLFDT,AFM Element Common (Element 1),05000018,SLFDT,0,127,MIDI_7bit,E1,AFM Sub LFO Delay/Decay time,manual
+AFMC_E1_SLPMD,AFM Element Common (Element 1),05000019,SLPMD,,,enum,E1,AFM Sub LFO Pitch Mod Depth mode,manual
+AWM_E1_WSOURCE,AWM Element Data (Element 1),07000000,WSOURCE,0,4,enum,E1,AWM Wave Source,manual
+AWM_E1_AWMWAVE,AWM Element Data (Element 1),07000001,AWMWAVE,0,255,word,E1,AWM Wave number (2 bytes V1 VV),manual
+AWM_E1_PPM,AWM Element Data (Element 1),07000002,PPM,0,1,bool,E1,Frequency Mode (normal/fixed),manual
+AWM_E1_PNOTE,AWM Element Data (Element 1),07000003,PNOTE,0,127,MIDI_7bit,E1,Fixed mode note number,manual
+AWM_E1_PPF,AWM Element Data (Element 1),07000004,PPF,-64,63,signed,E1,Frequency Fine,manual
+AWM_E1_PMLPMS,AWM Element Data (Element 1),07000005,PMLPMS,0,7,index,E1,Pitch Mod Sensitivity,manual
+AWM_E1_PPR1,AWM Element Data (Element 1),07000006,PPR1,0,63,MIDI_7bit,E1,AWM Pitch EG Rate 1,manual
+AWM_E1_PPR2,AWM Element Data (Element 1),07000007,PPR2,0,63,MIDI_7bit,E1,AWM Pitch EG Rate 2,manual
+AWM_E1_PPR3,AWM Element Data (Element 1),07000008,PPR3,0,63,MIDI_7bit,E1,AWM Pitch EG Rate 3,manual
+AWM_E1_PPRR1,AWM Element Data (Element 1),07000009,PPRR1,0,63,MIDI_7bit,E1,AWM Pitch EG key off Rate 1,manual
+AWM_E1_PPL0,AWM Element Data (Element 1),0700000A,PPL0,-64,63,signed,E1,AWM Pitch EG Level 0,manual
+AWM_E1_PPL1,AWM Element Data (Element 1),0700000B,PPL1,-64,63,signed,E1,AWM Pitch EG Level 1,manual
+AWM_E1_PPL2,AWM Element Data (Element 1),0700000C,PPL2,-64,63,signed,E1,AWM Pitch EG Level 2,manual
+AWM_E1_PPL3,AWM Element Data (Element 1),0700000D,PPL3,-64,63,signed,E1,AWM Pitch EG Level 3,manual
+AWM_E1_PPRL1,AWM Element Data (Element 1),0700000E,PPRL1,-64,63,signed,E1,AWM Pitch EG key off Level 1,manual
+AWM_E1_PPEGR,AWM Element Data (Element 1),0700000F,PPEGR,1,3,index,E1,AWM Pitch EG Range,manual
+AWM_E1_PPRS,AWM Element Data (Element 1),07000010,PPRS,-7,7,signed,E1,AWM Pitch EG Rate Scaling,manual
+AWM_E1_PVPSW,AWM Element Data (Element 1),07000011,PVPSW,0,1,bool,E1,AWM Velocity Switch (off/on),manual
+AWM_E1_PLFSPD,AWM Element Data (Element 1),07000012,PLFSPD,0,99,MIDI_7bit,E1,AWM LFO Speed,manual
+AWM_E1_PLFDLY,AWM Element Data (Element 1),07000013,PLFDLY,0,99,MIDI_7bit,E1,AWM LFO Delay,manual
+AWM_E1_PLFPMD,AWM Element Data (Element 1),07000014,PLFPMD,0,127,MIDI_7bit,E1,AWM LFO Pitch Mod Depth,manual
+AWM_E1_PLFAMD,AWM Element Data (Element 1),07000015,PLFAMD,0,127,MIDI_7bit,E1,AWM LFO Amp Mod Depth,manual
+AWM_E1_PLFFMD,AWM Element Data (Element 1),07000016,PLFFMD,0,127,MIDI_7bit,E1,AWM LFO Filter Mod Depth,manual
+AWM_E1_PLFWAV,AWM Element Data (Element 1),07000017,PLFWAV,0,5,enum,E1,AWM LFO Wave,manual
+AWM_E1_PLINTP,AWM Element Data (Element 1),07000018,PLINTP,0,99,MIDI_7bit,E1,AWM LFO Initial Phase,manual
+AWM_E1_PAEGMD,AWM Element Data (Element 1),0700004F,PAEGMD,0,1,enum,E1,AWM Amplitude EG mode (normal/hold),manual
+AWM_E1_PARI,AWM Element Data (Element 1),07000050,PARI,0,63,MIDI_7bit,E1,AWM Amp EG Attack Rate (R1); CONFIRMED 07/00/00/50 (display=raw-1),manual
+AWM_E1_PAR2,AWM Element Data (Element 1),07000051,PAR2,0,63,MIDI_7bit,E1,AWM Amp EG Decay Rate (R2),manual
+AWM_E1_PAR3,AWM Element Data (Element 1),07000052,PAR3,0,63,MIDI_7bit,E1,AWM Amp EG Rate 3,manual
+AWM_E1_PAR4,AWM Element Data (Element 1),07000053,PAR4,0,63,MIDI_7bit,E1,AWM Amp EG Rate 4,manual
+AWM_E1_PARR1,AWM Element Data (Element 1),07000054,PARR1,0,63,MIDI_7bit,E1,AWM Amp EG key off Rate 1,manual
+AWM_E1_PAL2,AWM Element Data (Element 1),07000055,PAL2,0,63,MIDI_7bit,E1,AWM Amp EG Level 2,manual
+AWM_E1_PAL3,AWM Element Data (Element 1),07000056,PAL3,0,63,MIDI_7bit,E1,AWM Amp EG Level 3,manual
+AWM_E1_PARS,AWM Element Data (Element 1),07000057,PARS,-7,7,signed,E1,AWM Amp EG Rate Scaling,manual
+AWM_E1_PABP1,AWM Element Data (Element 1),07000058,PABP1,0,127,MIDI_7bit,E1,AWM Output Level Scaling Break Point 1,manual
+AWM_E1_PABP2,AWM Element Data (Element 1),07000059,PABP2,0,127,MIDI_7bit,E1,AWM Output Level Scaling Break Point 2,manual
+AWM_E1_PABP3,AWM Element Data (Element 1),0700005A,PABP3,0,127,MIDI_7bit,E1,AWM Output Level Scaling Break Point 3,manual
+AWM_E1_PABP4,AWM Element Data (Element 1),0700005B,PABP4,0,127,MIDI_7bit,E1,AWM Output Level Scaling Break Point 4,manual
+AWM_E1_PAOS1,AWM Element Data (Element 1),0700005C,PAOS1,-128,127,signed,E1,AWM Output Level Scaling Offset 1,manual
+AWM_E1_PAOS2,AWM Element Data (Element 1),0700005D,PAOS2,-128,127,signed,E1,AWM Output Level Scaling Offset 2,manual
+AWM_E1_PAOS3,AWM Element Data (Element 1),0700005E,PAOS3,-128,127,signed,E1,AWM Output Level Scaling Offset 3,manual
+AWM_E1_PAOS4,AWM Element Data (Element 1),0700005F,PAOS4,-128,127,signed,E1,AWM Output Level Scaling Offset 4,manual
+AWM_E1_PAVSON,AWM Element Data (Element 1),07000060,PAVSON,-7,7,signed,E1,AWM Velocity Sensitivity,manual
+AWM_E1_PARVSW,AWM Element Data (Element 1),07000061,PARVSW,0,1,bool,E1,AWM Attack Rate Velocity Switch (off/on),manual
+AWM_E1_PAMS,AWM Element Data (Element 1),07000062,PAMS,-7,7,signed,E1,AWM Amplitude Mod Sensitivity,manual
+EFX_EFMODE,Effect Data,08000020,EFMODE,0,2,enum,N/A,Effect mode (off/serial/parallel),manual
+EFX_EF1TYPE,Effect Data,08000021,EF1TYPE,0,60,enum,N/A,Effect 1 type,manual
+EFX_EF1PRM1,Effect Data,08000022,EF1PRM1,,,MIDI_7bit,N/A,Effect 1 parameter 1 (range depends on EF1TYPE),manual
+EFX_EF1PRM2,Effect Data,08000023,EF1PRM2,,,MIDI_7bit,N/A,Effect 1 parameter 2,manual
+EFX_EF1PRM3,Effect Data,08000024,EF1PRM3,,,MIDI_7bit,N/A,Effect 1 parameter 3,manual
+EFX_EF1PRM4,Effect Data,08000025,EF1PRM4,,,MIDI_7bit,N/A,Effect 1 parameter 4,manual
+EFX_EF1PRM5,Effect Data,08000026,EF1PRM5,,,MIDI_7bit,N/A,Effect 1 parameter 5,manual
+EFX_EF1PRM6,Effect Data,08000027,EF1PRM6,,,MIDI_7bit,N/A,Effect 1 parameter 6,manual
+EFX_EF1PRM7,Effect Data,08000028,EF1PRM7,,,MIDI_7bit,N/A,Effect 1 parameter 7,manual
+EFX_EF1PRM8,Effect Data,08000029,EF1PRM8,,,MIDI_7bit,N/A,Effect 1 parameter 8,manual
+EFX_EF1PRM9,Effect Data,0800002A,EF1PRM9,,,MIDI_7bit,N/A,Effect 1 parameter 9,manual
+EFX_EF1PRM10,Effect Data,0800002B,EF1PRM10,,,MIDI_7bit,N/A,Effect 1 parameter 10,manual
+EFX_EF1OUTLV1,Effect Data,0800002C,EF1OUTLV1,0,100,MIDI_7bit,N/A,Effect 1 output level 1,manual
+EFX_EF1OUTLV2,Effect Data,0800002D,EF1OUTLV2,0,100,MIDI_7bit,N/A,Effect 1 output level 2,manual
+EFX_EF2TYPE,Effect Data,0800002E,EF2TYPE,0,60,enum,N/A,Effect 2 type,manual
+EFX_EF2PRM1,Effect Data,0800002F,EF2PRM1,,,MIDI_7bit,N/A,Effect 2 parameter 1,manual
+EFX_EF2PRM2,Effect Data,08000030,EF2PRM2,,,MIDI_7bit,N/A,Effect 2 parameter 2,manual
+EFX_EF2PRM3,Effect Data,08000031,EF2PRM3,,,MIDI_7bit,N/A,Effect 2 parameter 3,manual
+EFX_EF2PRM4,Effect Data,08000032,EF2PRM4,,,MIDI_7bit,N/A,Effect 2 parameter 4,manual
+EFX_EF2PRM5,Effect Data,08000033,EF2PRM5,,,MIDI_7bit,N/A,Effect 2 parameter 5,manual
+EFX_EF2PRM6,Effect Data,08000034,EF2PRM6,,,MIDI_7bit,N/A,Effect 2 parameter 6,manual
+EFX_EF2PRM7,Effect Data,08000035,EF2PRM7,,,MIDI_7bit,N/A,Effect 2 parameter 7,manual
+EFX_EF2PRM8,Effect Data,08000036,EF2PRM8,,,MIDI_7bit,N/A,Effect 2 parameter 8,manual
+EFX_EF2PRM9,Effect Data,08000037,EF2PRM9,,,MIDI_7bit,N/A,Effect 2 parameter 9,manual
+EFX_EF2PRM10,Effect Data,08000038,EF2PRM10,,,MIDI_7bit,N/A,Effect 2 parameter 10,manual
+EFX_EF2EFBAL1,Effect Data,08000039,EF2EFBAL1,0,100,MIDI_7bit,N/A,Effect 2 mix level,manual
+EFX_EF2OUTLV1,Effect Data,0800003A,EF2OUTLV1,0,100,MIDI_7bit,N/A,Effect 2 output level 1,manual
+EFX_EF2OUTLV2,Effect Data,0800003B,EF2OUTLV2,0,100,MIDI_7bit,N/A,Effect 2 output level 2,manual
+EFX_OUT1EFBAL,Effect Data,0800003C,OUT1EFBAL,0,100,MIDI_7bit,N/A,Output 1 effect balance,manual
+EFX_OUT2EFBAL,Effect Data,0800003D,OUT2EFBAL,0,100,MIDI_7bit,N/A,Output 2 effect balance,manual
+EFX_CTRL1PRM,Effect Data,0800003E,CTRL1PRM,0,32,enum,N/A,Controller 1 parameter,manual
+EFX_CTRL1ASN,Effect Data,0800003F,CTRL1ASN,0,120,MIDI_7bit,N/A,Controller 1 device assign,manual
+EFX_CTRL1MIN,Effect Data,08000040,CTRL1MIN,0,99,MIDI_7bit,N/A,Controller 1 MIN,manual
+EFX_CTRL1MAX,Effect Data,08000041,CTRL1MAX,0,99,MIDI_7bit,N/A,Controller 1 MAX,manual
+EFX_CTRL2PRM,Effect Data,08000042,CTRL2PRM,0,32,enum,N/A,Controller 2 parameter,manual
+EFX_CTRL2ASN,Effect Data,08000043,CTRL2ASN,0,120,MIDI_7bit,N/A,Controller 2 device assign,manual
+EFX_CTRL2MIN,Effect Data,08000044,CTRL2MIN,0,99,MIDI_7bit,N/A,Controller 2 MIN,manual
+EFX_CTRL2MAX,Effect Data,08000045,CTRL2MAX,0,99,MIDI_7bit,N/A,Controller 2 MAX,manual
+EFX_EFLFOWV,Effect Data,08000046,EFLFOWV,0,5,enum,N/A,Effect LFO wave (tri/dwn/up/squ/sin/S-H),manual
+EFX_EFLFOSP,Effect Data,08000047,EFLFOSP,0,99,MIDI_7bit,N/A,Effect LFO speed,manual
+EFX_ER50DL,Effect Data,08000048,ER50DL,0,99,MIDI_7bit,N/A,Effect LFO delay,manual
+EFX_EFLFOPH,Effect Data,08000049,EFLFOPH,0,99,MIDI_7bit,N/A,Effect LFO initial phase,manual
 ZZ00,_workspace_notice,00000000,_reference_files_,,,meta,N/A,Primary transcription: _agent_context/sy99_sysex_complete.md (user-supplied). SY99E2.PDF link in SY99E2_reference.txt,manual

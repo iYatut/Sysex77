@@ -13,6 +13,19 @@
 #include "../JuceLibraryCode/JuceHeader.h"
 
 //==============================================================================
+// [LIBSYNC] slotInBank 0..15, bankOffset 0|16|32|48 → global index 0..63
+static inline void selectLibraryVoiceSlot (int slotInBank, int bankOffset)
+{
+    const int globalIdx = bankOffset + slotInBank;
+    bankSelectedVoiceIndex = globalIdx;
+    if (globalIdx >= 0 && globalIdx < arrayListVoices.size())
+    {
+        bankSelectedVoiceName = arrayListVoices[globalIdx].trimEnd();
+        bankSelectedVoiceNameValue.setValue (juce::var (bankSelectedVoiceName));
+    }
+}
+
+//==============================================================================
 
 class BankATableModel    : public Component
 
@@ -52,7 +65,7 @@ private:
         }
         void listBoxItemClicked	(int 	row, const MouseEvent &)	 override
         {
-            Logger::writeToLog("table A mouse event");
+            selectLibraryVoiceSlot (row, 0);
         }
         
         void paintListBoxItem (int rowNumber, Graphics& g,
@@ -258,7 +271,12 @@ private:
             
             return 16;
         }
-        
+
+        void listBoxItemClicked (int row, const MouseEvent &) override
+        {
+            selectLibraryVoiceSlot (row, 16);
+        }
+
         void paintListBoxItem (int rowNumber, Graphics& g,
                                int width, int height, bool rowIsSelected) override
         {
@@ -408,7 +426,12 @@ private:
             
             return 16;
         }
-        
+
+        void listBoxItemClicked (int row, const MouseEvent &) override
+        {
+            selectLibraryVoiceSlot (row, 32);
+        }
+
         void paintListBoxItem (int rowNumber, Graphics& g,
                                int width, int height, bool rowIsSelected) override
         {
@@ -559,6 +582,12 @@ private:
             
             return 16;
         }
+
+        void listBoxItemClicked (int row, const MouseEvent &) override
+        {
+            selectLibraryVoiceSlot (row, 48);
+        }
+
         void paintListBoxItem (int rowNumber, Graphics& g,
                                int width, int height, bool rowIsSelected) override
         {

@@ -123,6 +123,8 @@ struct VoicePage   : public Component, public Slider::Listener, public ComboBox:
 
         // ELMODE receive: listen to incoming SysEx; match address 02 00 00 00.
         valueSysexIn.addListener(this);
+        // [LIBSYNC] Library slot name → editName (no VNAM echo to synth).
+        bankSelectedVoiceNameValue.addListener(this);
 
         // Voice Common Params panel (Group B: 02 00 00 28..43)
         addAndMakeVisible (commonPanel);
@@ -188,6 +190,7 @@ struct VoicePage   : public Component, public Slider::Listener, public ComboBox:
         editName.removeListener(this);
         comboMode.removeListener(this);
         valueSysexIn.removeListener(this);
+        bankSelectedVoiceNameValue.removeListener(this);
     }
     
     #include "ValueTrees.h"
@@ -238,6 +241,15 @@ struct VoicePage   : public Component, public Slider::Listener, public ComboBox:
     }
     void valueChanged(Value & value) override
     {
+        if (value.refersToSameSourceAs (bankSelectedVoiceNameValue))
+        {
+            const String name = value.getValue().toString();
+            receivingVNAM = true;
+            editName.setText (name, juce::dontSendNotification);
+            receivingVNAM = false;
+            return;
+        }
+
         if (value.refersToSameSourceAs(valueSysexIn))
         {
             auto incoming = value.getValue();

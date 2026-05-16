@@ -88,6 +88,43 @@ public:
       {
           loadBankRequest = false; //make a better code later
           loadBank();
+
+          int rowToSelect = -1;
+          for (int r = 0; r < arrayBank.size(); ++r)
+          {
+              if (arrayBank[r].equalsIgnoreCase ("UNNAMED.SYX")
+                  || arrayBank[r].equalsIgnoreCase ("UNNAMED.syx"))
+              {
+                  rowToSelect = r;
+                  break;
+              }
+          }
+          Time newestDumpTime;
+          if (rowToSelect < 0)
+          {
+              for (int r = 0; r < arrayBank.size() && r < BankFiles.size(); ++r)
+              {
+                  const String nm = arrayBank[r];
+                  if (nm.startsWithIgnoreCase ("DUMP-") && nm.endsWithIgnoreCase (".syx"))
+                  {
+                      const Time t = BankFiles[r].getLastModificationTime();
+                      if (rowToSelect < 0 || t > newestDumpTime)
+                      {
+                          newestDumpTime = t;
+                          rowToSelect = r;
+                      }
+                  }
+              }
+          }
+          if (rowToSelect < 0 && arrayBank.size() > 0)
+              rowToSelect = 0;
+          if (rowToSelect >= 0)
+          {
+              sourceListBox.selectRow (rowToSelect);
+              bankSelected = arrayBank[rowToSelect];
+              sendChangeMessage();
+              return;
+          }
       }
         Logger::writeToLog("BankModel: changebrodcaster");
         if (requestSysex == true)
@@ -131,35 +168,45 @@ public:
         else
         {
         arrayListVoices.clear();
+        voiceSysexFileOffsets.clear();
+        voiceSysexFileLengths.clear();
         MemoryBlock mb;
         if(BankFiles[sourceListBox.getSelectedRow()].exists())
         {
         BankFiles[sourceListBox.getSelectedRow()].loadFileAsData(mb);
-     
+
         const uint8* const data = (const uint8*) mb.getData();
-    
-        String str;
-  //      str = String(&data, mb.getSize());
-        int i =0;
-        int a = 0;
- Array<char>   val;
-        if(mb.getSize() > 0) // si pas de data evite le plantage !
+        const size_t total = mb.getSize();
+
+        if(total > 0) // si pas de data evite le plantage !
         {
-        while (i < mb.getSize() - 1)
+        size_t i = 0;
+        while (i < total)
         {
-      
+
             if(data[i]== 0xF0) //entree
             {
-                i = i + 33;
-                for(a=0; a<10; a++)
+                const size_t frameStart = i;
+                size_t j = i + 1;
+                while (j < total && data[j] != 0xF7)
+                    ++j;
+                const size_t frameEnd = (j < total ? j : total - 1);
+
+                String str;
+                if (frameStart + 33 + 10 <= total)
                 {
-                    str = str + juce::String::charToString(data[i+a]);
- //               str = str + String(data[i+a]+0x30);
-                
+                    for(int a = 0; a < 10; ++a)
+                    {
+                        const uint8 c = data[frameStart + 33 + a];
+                        const char ch = (c >= 0x20 && c < 0x7F) ? (char) c : ' ';
+                        str += String::charToString ((juce_wchar) ch);
+                    }
                 }
-                arrayListVoices.add(str);
-                str.clear();
-               
+                arrayListVoices.add (str);
+                voiceSysexFileOffsets.add ((int) frameStart);
+                voiceSysexFileLengths.add ((int) (frameEnd - frameStart + 1));
+
+                i = frameEnd;
             }
             ++i;
         }

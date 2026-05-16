@@ -226,3 +226,167 @@ Output: updated 05_missing_audit.md and 00_SPEC.md only.
 > **Итог.** После выполнения всех шести промптов Sysex77 покрывает полный Voice Common SY99  
 > с двусторонней SysEx-связью, throttle-защитой и echo guard.  
 > Следующий шаг: расширить аудит на Elements 1–8 и Effects (отдельная серия промптов).
+
+---
+
+## Промпт #9 — Pan.h: входящая синхронизация графа Pan EG
+
+```
+Read _agent_context/00_SPEC.md, 01_code_map.md (Pan / Hook section),
+05_missing_audit.md (строка про "граф Pan EG"), 09_confirmed_addresses.md (block 0x0A).
+Read Sysex77-master/Source/Pan.h, Hook.h, ADSR.h (SADSR setSegmentRate/Level API).
+Read Sysex77-master/Source/MidiDemo.h (valueSysexIn — глобальный Value var-array
+из 6 элементов: data[3..8]).
+
+Tech stack: C++/JUCE. Виджеты MidiSlider слушают valueSysexIn и обновляют
+свой Slider::setValue(...) при совпадении sysexData[3..6] с пришедшим адресом.
+В Pan.h ChangeBroadcaster от MidiSlider Value уже триггерит
+syncSegmentsFromSliders() — но это путь через слайдеры. Прямой парсинг входящих
+сообщений делает синхронизацию надёжнее (особенно когда слайдер не виден или
+release-level короче, чем dispatcher).
+
+Task: расширить Pan::valueChanged(Value&) обработкой valueSysexIn для
+адресов `0A [elem] 00 03..0F` (Rate/Level), `0A [elem] 00 02` (HT) и
+`0A [elem] 00 10` (SLP):
+
+1. Хранить текущий element offset в члене `int elementOffset` (заполняется
+   в setElementNumber).
+2. В Pan() / setElementNumber вызвать `valueSysexIn.addListener(this)`,
+   в ~Pan() — removeListener.
+3. В valueChanged(Value&) первой веткой проверить
+   `value.refersToSameSourceAs(valueSysexIn)`:
+   - распарсить b3=0x0A, b4=elementOffset, b5=0x00;
+   - по b6 вызвать egPan.setSegmentRate / setSegmentLevel /
+     setReleaseLevel / setRelease / setHoldTime / setLoopPoint
+     с конвертацией raw → percentage из существующих lambdas;
+   - использовать `dontSendNotification`-семантику (НЕ трогать слайдеры
+     и НЕ слать SysEx);
+   - вернуться без вызова syncSegmentsFromSliders().
+4. Слайдер-логика send (sliderValueChanged) НЕ меняется.
+
+Constraints:
+- Изменения ТОЛЬКО в Pan.h.
+- Не отправлять исходящих SysEx из обработчика valueSysexIn.
+- Сохранять isUpdating guard.
+
+Output: modified Pan.h only.
+```
+
+---
+
+## Промпт #10 — WaveEg.h: аудит и фикс адреса sliderR2 (AWM Amp EG R2)
+
+```
+Read _agent_context/00_SPEC.md, 09_confirmed_addresses.md (block 0x07),
+sy99_sysex_complete.md (Group 07 — AWM Element Data, particularly NN=0x50/0x51),
+05_missing_audit.md (строка AWM EG R2 (E1)/(E3)).
+Read Sysex77-master/Source/WaveEg.h (setElementNumber/applyElem/setMidiSysex
+для sliderR2 — сейчас segment-1 rate).
+
+Контекст: setElementNumber собирает шаблон `sysexdata2[9] = { 0x43, 0x10, 0x34,
+0x00, 0x00, 0x00, 0x01, 0x00, 0x00 }` и далее меняет только sysexdata2[4] (elem)
+и sysexdata2[6] (NN). Это значит, что все слайдеры egWave (sliderR1..RR2 и
+sliderL0..RL2) отправляют параметр в **group 0x00 (Multi Common Data)** — это
+неверный группа per sy99_sysex_complete.md. Корректная группа — 0x07 (AWM Element
+Data). sliderAwmR2E1/E3 уже подключены к подтверждённым адресам 07/00/00/50 и
+07/40/00/51 — а sliderR2 (segment 1 rate в графе egWave) семантически = PAR2
+(Amp EG Decay Rate / R2) = `0x07/EE/00/0x51` per service manual.
+
+Task:
+1. Зафиксировать, что текущий шаблон sliderR2 = `00 EE 00 03` — wrong group.
+2. Заменить setMidiSysex на корректный массив
+   `{ 0x43, 0x10, 0x34, 0x07, elemOffset, 0x00, 0x51, 0x00, 0 }`.
+3. Обновить _agent_context/05_missing_audit.md — добавить строку про fix.
+
+Constraints:
+- Не трогать другие сегменты (sliderR1/R3/R4/RR1/RR2, sliderL0..RL2) —
+  отдельный аудит Amp EG, для отдельного промпта.
+- Не менять диапазоны (setRangeAndRound 0,63).
+- Не вводить новых UI-контролов.
+
+Output: modified WaveEg.h + 05_missing_audit.md.
+```
+
+---
+
+## Промпт #11 — Расширение CSV: Elements 1–4 + Effects (Groups 0x03/0x05/0x07/0x08)
+
+```
+Read _agent_context/00_SPEC.md, 03_parameter_map.csv (формат столбцов),
+sy99_sysex_complete.md (Group 02, 03, 05, 07, 08), 09_confirmed_addresses.md.
+
+Tech stack: C++/JUCE. Шаблон SysEx: F0 43 10 34 GG EE 00 NN 0V VV F7.
+Element selector EE: 0x00=E1, 0x20=E2, 0x40=E3, 0x60=E4.
+
+Task: добавить строки в 03_parameter_map.csv (source=manual) для всех параметров
+групп 0x03, 0x05, 0x07, 0x08 из sy99_sysex_complete.md, которых ещё нет в CSV.
+
+Соглашения:
+- Канон: E1 (b4=0x00) одна строка на параметр; E2..E4 — те же адреса с b4
+  заменой 0x20/0x40/0x60 (отражается в комментарии notes).
+- offset_hex — ровно 8 hex chars (`gghllpp` где gg=group, hh=elem, ll=00, pp=NN).
+- group_id: `NE_E1_*` (Normal Element), `AFMC_E1_*` (AFM Element Common),
+  `AWM_E1_*` (AWM Element), `EFX_*` (Effects).
+- Если у параметра нет известного UI в Sysex77 — статус ❌ в 05_missing_audit.md.
+- Если у параметра нет данных с железа и формат под вопросом (биты, multi-byte) —
+  статус ❓.
+
+В 05_missing_audit.md добавить секции:
+- "Elements 1–4 + Effects — расширение CSV"
+- Под-таблицы по группам 0x03, 0x05, 0x07, 0x08 с колонками
+  `param_name | address | UI_control | send | receive | notes`.
+
+Constraints:
+- Не добавлять рабочий код. Только CSV + audit.
+- Не дублировать существующие строки (AWM_E1_R2 / AWM_E3_R2 уже есть для
+  адресов 07/00/00/50 и 07/40/00/51 — добавить новую запись AWM_E1_PARI/PAR2
+  с разнесённой семантикой согласно manual).
+- Эффекты с переменной семантикой параметров (EF1PRM1..10) оставить
+  range_min/max пустыми; в notes описать «диапазон зависит от EF1TYPE».
+
+Output: updated 03_parameter_map.csv + 05_missing_audit.md.
+```
+
+---
+
+## Промпт #12 — Library skeleton (`Librairie.h`) + WaveEg Amp EG remap
+
+Реализовано инкрементом `sysex77_library_only_increment.patch` / `sysex77_next_library_increment.patch` (одно и то же по коду). Детали — `_agent_context/05_missing_audit.md`, секция «Library & WaveEg (Prompt #12)».
+
+**Дополнение — синхронизация библиотеки ↔ голос ([LIBSYNC]):** патчи **`sysex77_library_patch_sync_increment.patch`** и **`sysex77_full_with_library_sync.patch`** (код одинаковый по сути) перенесены в дерево поверх этого скелета. Полная таблица и ограничения — секция «**Library ↔ Voice sync**» в `05_missing_audit.md`. При поиске в чат‑логах не путать с **Промпт #9 ниже про Pan.h**.
+
+### Часть A — Librairie.h
+
+```
+Read Sysex77-master/Source/Librairie.h, BankTableModel.h, VoicesTableModel.h,
+MidiDemo.h (globals), MidiSysex.h (OSC handlers).
+
+Task: добавить в LibrairiePage базовые операции библиотеки без поломки bulk-pipeline.
+
+1) IMPORT — FileChooser → копирование `.syx` в appDirPath; refresh списка.
+2) EXPORT — FileChooser save для текущего bankSelected.
+3) SEND VOICE — выполнено в LIBSYNC: парсинг кадров и OSC `/77SendVoice` (`MidiSysex.h`), не fallback на `/77SendBank`.
+4) REQUEST VOICE — тот же receive-пайплайн (timer + btStop).
+5) saveDump — файлы `DUMP-YYYYMMDD-HHMMSS.syx`, проверка пустого дампа.
+
+Constraints:
+- Не менять формат сохранения (raw concat).
+- std::unique_ptr<FileChooser> chooser как член класса.
+- После LIBSYNC: `/77SendVoice` разрешён (слайсер по `F0…F7` в `BankTableModel`).
+
+Output: Librairie.h + обновление 05_missing_audit.md и 06_agent_prompts.md.
+```
+
+### Часть B — WaveEg.h Amp EG remap (`b3=0x07`)
+
+```
+Переадресовать sliderR1/R2/R3/R4/RR1, sliderL2/L3, sliderSlope на NN 0x50..0x57
+per sy99_sysex_complete.md (группа 0x07). E1: sliderR1 диапазон 0..62.
+
+Constraints:
+- L0/L1/L4/RL1/RL2 остаются на legacy b3=0x00 до подтверждения NN.
+- Hook/addSegment второй шаблон не переписывать в этом промпте.
+
+Output: WaveEg.h + 05_missing_audit.md + 00_SPEC.md (метрики).
+```
+

@@ -220,6 +220,9 @@ public:
         Logger::writeToLog("WaveEg setElement");
         egWave.clearSegments();
 
+        // Legacy template (b3=0x00) preserved only for slope/levels that have no
+        // confirmed manual address. Rate sliders below are remapped to the AWM
+        // Amp EG block (b3=0x07, NN=0x50..0x54 per sy99_sysex_complete.md / Group 0x07).
         int sysexdata[9]  = { 0x43, 0x10, 0x34, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };
         int sysexdata2[9] = { 0x43, 0x10, 0x34, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00 };
 
@@ -246,41 +249,52 @@ public:
         sliderRR1.getValueObject().referTo (valueTreeVoice.getPropertyAsValue("EGAWMVOL_RR1_E"  + e, &um));
         sliderRR2.getValueObject().referTo (valueTreeVoice.getPropertyAsValue("EGAWMVOL_RR2_E"  + e, &um));
 
-        sysexdata[6] = 0x10;
-        sliderSlope.setMidiSysex(sysexdata);
+        // sliderSlope → PARS / Amp EG Rate Scaling (0x07, NN=0x57). UI range -7..+7
+        // (set in constructor). Byte encoding for PARS likely two's-complement; pending HW check.
+        int sysexSlope[9] = { 0x43, 0x10, 0x34, 0x07, elemOffset, 0x00, 0x57, 0x00, 0 };
+        sliderSlope.setMidiSysex(sysexSlope);
 
         auto toPctL = [](double val) { return (int)(val * 100.0 / 63.0); };
         auto toPctR = [](double val) { return (int)((64.0 - val) * 100.0 / 64.0); };
 
         // Segment 0: L0 → R1 → L1
+        // sliderR1 → AWM PARI / Amp EG Attack Rate (0x07, NN=0x50). E1: display=raw-1 (0..62).
         sysexdata[6] = 0x00; sysexdata2[6] = 0x01;
         egWave.addSegment(toPctL(sliderL0.getValue()), toPctR(sliderR1.getValue()), "L0\xe2\x86\x92L1", 63, sysexdata, 63, sysexdata2);
         sliderL0.setMidiSysex(sysexdata);  sliderL0.setRangeAndRound(0, 63, 0);
-        sliderR1.setMidiSysex(sysexdata2); sliderR1.setRangeAndRound(0, 63, 0);
+        int sysexR1[9] = { 0x43, 0x10, 0x34, 0x07, elemOffset, 0x00, 0x50, 0x00, 0 };
+        sliderR1.setMidiSysex(sysexR1);
+        sliderR1.setRangeAndRound(0, (element == 1 ? 62 : 63), 0);
 
-        // Segment 1: L1 → R2 → L2
+        // Segment 1: L1 → R2 → L2 — sliderR2 = PAR2 / Decay Rate (0x07, NN=0x51).
         sysexdata[6] = 0x02; sysexdata2[6] = 0x03;
         egWave.addSegment(toPctL(sliderL1.getValue()), toPctR(sliderR2.getValue()), "L1\xe2\x86\x92L2", 63, sysexdata, 63, sysexdata2);
         sliderL1.setMidiSysex(sysexdata);  sliderL1.setRangeAndRound(0, 63, 0);
-        sliderR2.setMidiSysex(sysexdata2); sliderR2.setRangeAndRound(0, 63, 0);
+        int sysexR2[9] = { 0x43, 0x10, 0x34, 0x07, elemOffset, 0x00, 0x51, 0x00, 0 };
+        sliderR2.setMidiSysex(sysexR2);    sliderR2.setRangeAndRound(0, 63, 0);
 
-        // Segment 2: L2 → R3 → L3
+        // Segment 2: L2 → R3 → L3 — sliderR3=PAR3 (0x52), sliderL2=PAL2 (0x55).
         sysexdata[6] = 0x04; sysexdata2[6] = 0x05;
         egWave.addSegment(toPctL(sliderL2.getValue()), toPctR(sliderR3.getValue()), "L2\xe2\x86\x92L3", 63, sysexdata, 63, sysexdata2);
-        sliderL2.setMidiSysex(sysexdata);  sliderL2.setRangeAndRound(0, 63, 0);
-        sliderR3.setMidiSysex(sysexdata2); sliderR3.setRangeAndRound(0, 63, 0);
+        int sysexL2[9] = { 0x43, 0x10, 0x34, 0x07, elemOffset, 0x00, 0x55, 0x00, 0 };
+        sliderL2.setMidiSysex(sysexL2);    sliderL2.setRangeAndRound(0, 63, 0);
+        int sysexR3[9] = { 0x43, 0x10, 0x34, 0x07, elemOffset, 0x00, 0x52, 0x00, 0 };
+        sliderR3.setMidiSysex(sysexR3);    sliderR3.setRangeAndRound(0, 63, 0);
 
-        // Segment 3: L3 → R4 → L4
+        // Segment 3: L3 → R4 → L4 — sliderR4=PAR4 (0x53), sliderL3=PAL3 (0x56).
         sysexdata[6] = 0x06; sysexdata2[6] = 0x07;
         egWave.addSegment(toPctL(sliderL3.getValue()), toPctR(sliderR4.getValue()), "L3\xe2\x86\x92L4", 63, sysexdata, 63, sysexdata2);
-        sliderL3.setMidiSysex(sysexdata);  sliderL3.setRangeAndRound(0, 63, 0);
-        sliderR4.setMidiSysex(sysexdata2); sliderR4.setRangeAndRound(0, 63, 0);
+        int sysexL3[9] = { 0x43, 0x10, 0x34, 0x07, elemOffset, 0x00, 0x56, 0x00, 0 };
+        sliderL3.setMidiSysex(sysexL3);    sliderL3.setRangeAndRound(0, 63, 0);
+        int sysexR4[9] = { 0x43, 0x10, 0x34, 0x07, elemOffset, 0x00, 0x53, 0x00, 0 };
+        sliderR4.setMidiSysex(sysexR4);    sliderR4.setRangeAndRound(0, 63, 0);
 
-        // Segment 4: L4 → RR1 → RL1  (Key-Off start)
+        // Segment 4: L4 → RR1 → RL1 — sliderRR1=PARR1 (0x54); L4/RL1 stay legacy b3=0x00.
         sysexdata[6] = 0x08; sysexdata2[6] = 0x09;
         egWave.addSegment(toPctL(sliderL4.getValue()), toPctR(sliderRR1.getValue()), "L4\xe2\x86\x92RL1", 63, sysexdata, 63, sysexdata2);
         sliderL4.setMidiSysex(sysexdata);  sliderL4.setRangeAndRound(0, 63, 0);
-        sliderRR1.setMidiSysex(sysexdata2); sliderRR1.setRangeAndRound(0, 63, 0);
+        int sysexRR1[9] = { 0x43, 0x10, 0x34, 0x07, elemOffset, 0x00, 0x54, 0x00, 0 };
+        sliderRR1.setMidiSysex(sysexRR1);  sliderRR1.setRangeAndRound(0, 63, 0);
 
         // Segment 5: RL1 → RR2 → RL2
         sysexdata[6] = 0x0a; sysexdata2[6] = 0x0b;

@@ -57,6 +57,7 @@ static const String adresseOscFoot = "/77Foot";
 static const String adresseOscMod = "/77Mod";
 static const String adresseOpMode = "/77OpMode";
 static const String adresseOscSendBank ="/77SendBank";
+static const String adresseOscSendVoice = "/77SendVoice"; // [LIBSYNC] per-voice frame from parsed .syx
 static const String adresseOscRepaint = "/77Repaint";
 static const String adresseOscParseVoices = "/77ParseVoices";
 static const String oscTotalVoiceVolume = "/77TotalVoiceVolume";
@@ -87,6 +88,12 @@ static const String oscSendMidiMessage = "/77MidiMessage";
 
 static   StringArray  arrayBank;    //la liste des banques
 static  StringArray arrayListVoices; // liste des voices
+// [LIBSYNC] Parsed per-voice SysEx bulk frames inside the selected .syx (F0 … F7 each).
+static Array<int> voiceSysexFileOffsets;
+static Array<int> voiceSysexFileLengths;
+static int    bankSelectedVoiceIndex = -1;
+static String bankSelectedVoiceName;
+static Value  bankSelectedVoiceNameValue;
 static const int maxFiles = 512;
 
 static        Array<File> BankFiles; //les fichiers des banques
