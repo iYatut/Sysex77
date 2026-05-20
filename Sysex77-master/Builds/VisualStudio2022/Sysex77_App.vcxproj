@@ -1,5 +1,3 @@
-<?xml version="1.0" encoding="UTF-8"?>
-
 <Project DefaultTargets="Build"
          ToolsVersion="17.0"
          xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
@@ -147,6 +145,7 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="..\..\Source\Main.cpp"/>
+    <ClCompile Include="..\..\Source\Sy99ParamRegistry.cpp"/>
     <ClCompile Include="..\..\..\..\..\Program Files\Juce\JUCE\modules\juce_audio_basics\audio_play_head\juce_AudioPlayHead.cpp">
       <ExcludedFromBuild>true</ExcludedFromBuild>
     </ClCompile>

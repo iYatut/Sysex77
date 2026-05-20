@@ -47,6 +47,7 @@
  
  *******************************************************************************/
 #include "Values.h"
+#include "LiveSynthState.h"
 
 // Set to 1 for temporary logs: queue sizes per async drain + max consecutive identical SysEx in batch.
 #ifndef SYSEX77_MIDI_MONITOR_DIAGNOSTICS
@@ -94,6 +95,9 @@ static Array<int> voiceSysexFileLengths;
 static int    bankSelectedVoiceIndex = -1;
 static String bankSelectedVoiceName;
 static Value  bankSelectedVoiceNameValue;
+/** Incremented on each library voice-slot click so Voice tab applies even if name unchanged. */
+static Value  bankVoiceSlotApplyTrigger;
+static int    bankVoiceSlotApplyNonce = 0;
 static const int maxFiles = 512;
 
 static        Array<File> BankFiles; //les fichiers des banques
@@ -102,20 +106,22 @@ int SYModel =1;
 int CommonFoot;
 int CommonMod;
 
-static bool newMessage;
-static bool requestSysex;
+bool newMessage = false;
+bool requestSysex = false;
 static bool doubleClickBank = false;
 static    bool bankDeleteKey = false;
 static int rowSelectedBank;
-static bool loadBankRequest = false;
-static     int timeOut;
+bool loadBankRequest = false;
+int timeOut = 0;
 static String bankSelected;
 
 static Value valueSysexIn; //values from sysex midi in
 static bool boolStopReceive; //to shunt the midi in when sending
 
 static int sysexModel;
-static uint8 sysexEngine;
+/** Yamaha device byte in outgoing `43 nn 34 …` payloads. Matches stable ELMODE route in `MidiSysex.h`
+    (literal `0x10`) until the user selects another ID in Config. Zero was wrong for SY99 default. */
+static uint8 sysexEngine { 0x10 };
 static     float fAngle = -90 * (float_Pi / 180.0); //Radiant to draw at 90°
 File appDirPath = File::getSpecialLocation(File::userApplicationDataDirectory ).getChildFile("Application Support/Sysex77");
 
@@ -124,6 +130,8 @@ static Path pathFilter2;
 static Path pathFilter3;
 static Path pathFilter4;
 int intTabIndex;
+static constexpr int kTabVoice  = 2;
+static constexpr int kTabCommon = 3;
 // ValueTree for the Voice
 //==============================================================================
 
@@ -164,10 +172,12 @@ struct DemoTabbedComponent  : public TabbedComponent
     : TabbedComponent (TabbedButtonBar::TabsAtTop)
     {
         auto colour = findColour (ResizableWindow::backgroundColourId);
-        addTab (TRANS("Setting"),     colour, new ConfigPage (), true);  
+        addTab (TRANS("Setting"),     colour, new ConfigPage (), true);
         addTab (TRANS("Librairie"),     colour, new LibrairiePage (), true);
        // addTab (TRANS("Midi"),     colour, new ControllerPage (), true);
-        addTab (TRANS("Voice"), colour, new VoicePage(), true);
+        auto* voicePage = new VoicePage();
+        addTab (TRANS("Voice"), colour, voicePage, true);
+        addTab (TRANS("Common"), colour, new VoiceCommonPage (*voicePage), true);
         addTab (TRANS("Midi Setting"),colour,nullptr,false);
    
         
@@ -176,10 +186,56 @@ struct DemoTabbedComponent  : public TabbedComponent
         //        getTabbedButtonBar().getTabButton (5)->setExtraComponent (new CustomTabButton (isRunningComponenTransformsDemo),
         //                                                                  TabBarButton::afterText);
     }
-    void currentTabChanged (int newCurrentTabIndex, const String& newCurrentTabName)override
+    void currentTabChanged (int newCurrentTabIndex, const String& newCurrentTabName) override
     {
-        if(newCurrentTabIndex<3)
-        intTabIndex = newCurrentTabIndex;
+        const int prevTab = intTabIndex;
+
+        if (suppressEditorExitPrompt())
+        {
+            if (newCurrentTabIndex < 4)
+                intTabIndex = newCurrentTabIndex;
+            return;
+        }
+
+        const auto isEditContextTab = [] (int tab) noexcept
+        {
+            return tab == kTabVoice || tab == kTabCommon;
+        };
+
+        const bool wasEdit = isEditContextTab (prevTab);
+        const bool isEdit = isEditContextTab (newCurrentTabIndex);
+        const bool commonToVoice = (prevTab == kTabCommon && newCurrentTabIndex == kTabVoice);
+        const bool leavingEdit = wasEdit && (! isEdit || commonToVoice);
+
+        if (! leavingEdit)
+        {
+            if (newCurrentTabIndex < 4)
+                intTabIndex = newCurrentTabIndex;
+            return;
+        }
+
+        const int targetTab = newCurrentTabIndex;
+
+        auto proceed = [this, targetTab, commonToVoice]()
+        {
+            setCurrentTabIndex (targetTab);
+
+            if (targetTab < 4)
+                intTabIndex = targetTab;
+
+            if (commonToVoice)
+                if (auto& cb = voiceTabRecallFromCommonCallback(); cb != nullptr)
+                    cb();
+        };
+
+        if (editorPatchDirty())
+        {
+            setCurrentTabIndex (prevTab);
+            tryLeaveEditorContext (proceed);
+            return;
+        }
+
+        executeEditorExitActionOnce (proceed);
     }
     void popupMenuClickOnTab (int tabIndex, const String& tabName)override
     {
@@ -238,12 +294,15 @@ private OSCReceiver::ListenerWithOSCAddress<OSCReceiver::MessageLoopCallback> //
 public:
     //==============================================================================
     MidiDemo (bool isRunningComponenTransformsDemo = false)
-    :  midiKeyboard       (keyboardState, MidiKeyboardComponent::horizontalKeyboard),
-    midiInputSelector  (new MidiDeviceListBox ("Midi Input Selector",  *this, true)),
-    midiOutputSelector (new MidiDeviceListBox ("Midi Output Selector", *this, false)),
-    tabs (isRunningComponenTransformsDemo)
-    
+    :  midiKeyboard (keyboardState, MidiKeyboardComponent::horizontalKeyboard)
     {
+        // Defer ListBox/tabs construction until MidiDemo subobjects (midiInputs/midiOutputs)
+        // are fully initialised; MidiDeviceListBox must not pass `this` as model in the
+        // ListBox base initializer (JUCE calls getNumRows during setModel).
+        midiInputSelector.reset (new MidiDeviceListBox ("Midi Input Selector", *this, true));
+        midiOutputSelector.reset (new MidiDeviceListBox ("Midi Output Selector", *this, false));
+        tabs = std::make_unique<DemoTabbedComponent> (isRunningComponenTransformsDemo);
+
         // Init to light the Paint call
 
         imgBack = ImageCache::getFromMemory(BinaryData::Sysex77_png, BinaryData::Sysex77_pngSize);
@@ -252,7 +311,7 @@ public:
         
 
         
-        addAndMakeVisible (tabs);
+        addAndMakeVisible (*tabs);
   
         addLabelAndSetStyle (midiInputLabel);
         addLabelAndSetStyle (midiOutputLabel);
@@ -281,6 +340,15 @@ public:
             sysExMsgCounter    = 0;
             midiMonitorCharCount = 0;
         };
+
+        // Monitor has no keyboard focus & no caret — Ctrl+C/extra menu won't work;
+        // one-click clipboard for logs.
+        addAndMakeVisible (btCopyMonitor);
+        btCopyMonitor.onClick = [this]
+        {
+            SystemClipboard::copyTextToClipboard (midiMonitor.getText());
+        };
+
         
         midiKeyboard.setName ("MIDI Keyboard");
         addAndMakeVisible (midiKeyboard);
@@ -292,6 +360,8 @@ public:
         midiMonitor.setCaretVisible (false);
         midiMonitor.setPopupMenuEnabled (false);
         midiMonitor.setText ({});
+        midiMonitor.setWantsKeyboardFocus (false); // logs must not steal keys from Voice name field
+        midiMonitor.setMouseClickGrabsKeyboardFocus (false);
         addAndMakeVisible (midiMonitor);
         
         if (! BluetoothMidiDevicePairingDialogue::isAvailable())
@@ -366,16 +436,38 @@ public:
         
 
         addOscListener();
-        tabs.setVisible(false);
-        tabs.setAlwaysOnTop(true);
+        tabs->setVisible (false);
+        tabs->setAlwaysOnTop (true);
 
 
         setSize (732, 520);
-        tabs.setCurrentTabIndex(1);
+        tabs->setCurrentTabIndex (1);
+        intTabIndex = 1;
         startTimer (500);
 
         // THROTTLE DEBOUNCE: wire the flush timer back to this MidiDemo.
         throttleTimer.owner = this;
+
+        libraryVoiceProgramChangeCallback() = [this] (int globalIdx)
+        {
+            auto& echo = libraryVoiceProgramChangeEchoGuard();
+            echo.lastGlobalIdx = globalIdx;
+            echo.sentAtMs = juce::Time::getMillisecondCounter();
+            sendLibraryVoiceRecallToSynth (globalIdx);
+        };
+
+        voiceTabRecallFromCommonCallback() = [this]
+        {
+            sendVoiceTabRecallFromCommonEdit();
+        };
+
+        if (auto* voicePage = dynamic_cast<VoicePage*> (tabs->getTabContentComponent (kTabVoice)))
+        {
+            commitEditorSessionToLiveSynthBaselineCallback() = [voicePage]()
+            {
+                voicePage->commitEditorSessionToLiveSynthBaseline();
+            };
+        }
     }
     
     ~MidiDemo()
@@ -418,10 +510,10 @@ public:
     //==============================================================================
     void timerCallback() override
     {
-        if(tabs.getCurrentTabIndex()==3)
+        if (tabs->getCurrentTabIndex() == 4)
         {
-            tabs.setCurrentTabIndex(intTabIndex);
-           tabs.setVisible(false);
+            tabs->setCurrentTabIndex (intTabIndex);
+           tabs->setVisible (false);
             
             //repaint();
         }
@@ -429,6 +521,25 @@ public:
         updateDeviceList (false);
     }
     
+    /** Send a burst of SysEx (e.g. VNAM ×10) with one MIDI-input shunt window. */
+    void sendMidiMessagesToOutputsShunted (const Array<MidiMessage>& messages)
+    {
+        if (messages.isEmpty())
+            return;
+
+        boolStopReceive = true;
+
+        for (auto midiOutput : midiOutputs)
+            if (midiOutput->outDevice.get() != nullptr)
+                for (const auto& m : messages)
+                {
+                    Logger::writeToLog ("OUT3 midi send");
+                    midiOutput->outDevice->sendMessageNow (m);
+                }
+
+        boolStopReceive = false;
+    }
+
     //==============================================================================
 
 #include "MidiSysex.h"
@@ -466,13 +577,13 @@ public:
     }
     void mouseDown (const MouseEvent&) override
     {
-        if (tabs.isVisible()  ==true)
+        if (tabs->isVisible())
         {
-            tabs.setVisible(false);
+            tabs->setVisible (false);
         }
         else
         {
-            tabs.setVisible(true);
+            tabs->setVisible (true);
         }
         
     }
@@ -506,9 +617,17 @@ public:
         btShowRealtime .setBounds (margin,                getHeight() / 2, getWidth() / 5, 24);
         btShowSysExOnly.setBounds (margin + getWidth()/5, getHeight() / 2, getWidth() / 5, 24);
         btBulk         .setBounds (getWidth() / 2,        getHeight() / 2, getWidth() / 4, 24);
-        btClearMonitor .setBounds (getWidth() * 3 / 4,    getHeight() / 2, getWidth() / 4 - margin, 24);
+        {
+            const int yBtn = getHeight() / 2;
+            const int rightQuarterX = (getWidth() * 3) / 4;
+            const int rightQuarterW = getWidth() / 4 - margin;
+            constexpr int gap = 4;
+            const int copyW = jmin (52, jmax (40, rightQuarterW / 3));
+            btCopyMonitor .setBounds (rightQuarterX, yBtn, copyW, 24);
+            btClearMonitor.setBounds (rightQuarterX + copyW + gap, yBtn, jmax (20, rightQuarterW - copyW - gap), 24);
+        }
         
-        tabs.setBounds (0,10,getWidth(),getHeight()-84);
+        tabs->setBounds (0, 10, getWidth(), getHeight() - 84);
         
         
         midiKeyboard.setBounds (margin +140, (getHeight() - 70 ), getWidth() - (2 * margin) - 140, 70);
@@ -583,14 +702,14 @@ private:
         MidiDeviceListBox (const String& name,
                            MidiDemo& contentComponent,
                            bool isInputDeviceList)
-        : ListBox (name, this),
-        parent (contentComponent),
-        isInput (isInputDeviceList)
+        : ListBox (name, nullptr),
+          parent (contentComponent),
+          isInput (isInputDeviceList)
         {
+            setModel (this);
             setOutlineThickness (1);
             setMultipleSelectionEnabled (true);
             setClickingTogglesRowSelection (true);
-            
         }
         
         //==============================================================================
@@ -677,15 +796,56 @@ private:
         // This is called on the MIDI thread
         const ScopedLock sl (midiMonitorLock);
 
+        // SysEx bulk capture must run even while outgoing SysEx holds boolStopReceive.
+        if (requestSysex && message.isSysEx())
+        {
+            arraySysex.add (message);
+            timeOut = 0;
+        }
+
         if (boolStopReceive || message.isActiveSense())
             return;
 
-        // SysEx bulk collection (parameter read-back) — always runs, unaffected by display filters
-        if (requestSysex && message.isSysEx())
+        if (message.isController())
         {
-            Logger::writeToLog("Add sysex");
-            arraySysex.add(message);
-            timeOut = 0;
+            const int ch = message.getChannel();
+            const int cc = message.getControllerNumber();
+
+            if (ch == 1)
+            {
+                if (cc == 0)
+                    inboundLibraryBankMsb() = message.getControllerValue();
+                else if (cc == 32)
+                    inboundLibraryBankLsb() = message.getControllerValue();
+            }
+        }
+
+        if (gRequestLiveVoiceRead && message.isSysEx())
+        {
+            notifyLiveVoiceReadActivity();
+            gArrayLiveReadSysex.add (message);
+
+            const int n = message.getSysExDataSize();
+            const uint8* d = message.getSysExData();
+
+            if (n == 9 && d[0] == 0x43 && d[2] == 0x34)
+                gLiveSynthState.ingestParameterFrame (d[3], d[4], d[5], d[6], d[7], d[8]);
+            else
+                gLiveSynthState.noteNonParameterMessage (n);
+        }
+
+        if (message.isProgramChange())
+        {
+            const int pc = message.getProgramChangeNumber();
+            const int ch = message.getChannel();
+
+            if (ch == 1 && pc >= 0)
+                inboundLibraryProgramSlot() = pc % 16;
+
+            juce::MessageManager::callAsync ([pc, ch]
+            {
+                handleIncomingLibraryProgramChange (pc, ch);
+            });
         }
 
         // Realtime single-byte messages: F8=Clock, FA=Start, FB=Continue,
@@ -765,10 +925,19 @@ private:
 
         String messageText;
 
+        if (gLiveReadClearMonitorPending)
+        {
+            gLiveReadClearMonitorPending = false;
+            midiMonitor.clear();
+            sysExMsgCounter = 0;
+            midiMonitorCharCount = 0;
+            messageText << "[LiveRead] monitor cleared — waiting for single-voice dump (07:1 Voice)\n";
+        }
+
         for (auto& message : batch)
         {
             // SysEx parameter extraction — always, independent of display filters
-            if (message.getSysExDataSize() == 9)
+            if (! gRequestLiveVoiceRead && message.getSysExDataSize() == 9)
             {
                 memcpy(&data, message.getSysExData(), message.getSysExDataSize());
                 if (data[0] == 0x43 && data[2] == 0x34)
@@ -791,12 +960,25 @@ private:
             {
                 const uint8* d   = message.getSysExData();
                 const int    len = message.getSysExDataSize();
-                String hexStr = "F0";
-                for (int i = 0; i < len; ++i)
-                    hexStr << " " << String::toHexString(d[i]).toUpperCase();
-                hexStr << " F7";
-                messageText << "[#" << String (++sysExMsgCounter) << "] SysEx: "
-                            << hexStr << "\n";
+                const bool captureMode = gRequestLiveVoiceRead || requestSysex;
+                // Single-voice LM blocks are typically 585+113 etc. (always < 2 KB).
+                // Omit hex only for very large frames outside capture (e.g. casual 64-voice flood).
+                const bool showFullHex = captureMode || len <= 2048;
+
+                if (! showFullHex)
+                {
+                    messageText << "[#" << String (++sysExMsgCounter) << "] SysEx: "
+                                << len << " bytes (hex omitted)\n";
+                }
+                else
+                {
+                    String hexStr = "F0";
+                    for (int i = 0; i < len; ++i)
+                        hexStr << " " << String::toHexString (d[i]).toUpperCase();
+                    hexStr << " F7";
+                    messageText << "[#" << String (++sysExMsgCounter) << "] SysEx: "
+                                << hexStr << "\n";
+                }
             }
             else
             {
@@ -807,30 +989,136 @@ private:
         if (messageText.isNotEmpty())
         {
             midiMonitorCharCount += messageText.length();
-            // Auto-clear before the TextEditor grows large enough to freeze the UI.
-            // 12000 chars ≈ 200 SysEx lines — well below the danger zone.
-            if (midiMonitorCharCount > 12000)
+
+            const int maxChars = (gRequestLiveVoiceRead || requestSysex)
+                                     ? kMidiMonitorMaxCharsLiveRead
+                                     : 12000;
+
+            if (midiMonitorCharCount > maxChars)
             {
                 midiMonitor.clear();
-                sysExMsgCounter      = 0;
+                sysExMsgCounter = 0;
                 midiMonitorCharCount = messageText.length();
+                messageText = "[monitor buffer full — older lines removed]\n" + messageText;
             }
+
             midiMonitor.insertTextAtCaret (messageText);
         }
     }
 public:
+    /** Common → Voice tab: always send full CC0+CC32+PC for bankSelectedVoiceIndex.
+        Separate from library-click recall; ignores libraryRecallContextBankMsb. */
+    void sendVoiceTabRecallFromCommonEdit()
+    {
+        constexpr int midiCh = 1;
+        const int globalIdx = resolveCurrentEditorVoiceGlobalIdx();
+
+        if (globalIdx < 0)
+        {
+            Logger::writeToLog ("[VOICE-TAB-RECALL] skipped: no valid editor context"
+                                + (bankSelected.isEmpty() ? String (" (no bank loaded)")
+                                                          : String())
+                                + " bankSelectedVoiceIndex=" + String (bankSelectedVoiceIndex));
+            return;
+        }
+
+        const int bankMsb = globalIdx / 16;
+        const int bankLsb = 0;
+        const int program = globalIdx % 16;
+
+        auto& echo = libraryVoiceProgramChangeEchoGuard();
+        echo.lastGlobalIdx = globalIdx;
+        echo.sentAtMs = juce::Time::getMillisecondCounter();
+
+        sendToOutputs (MidiMessage::controllerEvent (midiCh, 0, bankMsb));
+        sendToOutputs (MidiMessage::controllerEvent (midiCh, 32, bankLsb));
+
+        MidiMessage pc = MidiMessage::programChange (midiCh, program);
+        pc.setTimeStamp (Time::getMillisecondCounterHiRes() * 0.001);
+        sendToOutputs (pc);
+
+        Logger::writeToLog ("[VOICE-TAB-RECALL] CC0=" + String (bankMsb)
+                            + " CC32=" + String (bankLsb)
+                            + " PC=" + String (program)
+                            + " source=Common->Voice currentEditIdx=" + String (globalIdx)
+                            + " label=\"" + libraryVoiceSlotLabel (globalIdx) + "\"");
+    }
+
+    /** [LIBSYNC] Recall SY99 internal voice (outbound → Logger only, not midiMonitor).
+        External: CC0 → CC32 → PC when context unknown or bank MSB changed.
+        In-context: PC only when last full recall established the same MSB (0…3 = banks A–D).
+        Does not read SY99 panel/edit state — see libraryRecallContextBankMsb(). */
+    void sendLibraryVoiceRecallToSynth (int globalIdx)
+    {
+        constexpr int midiCh = 1;
+
+        if (globalIdx < 0 || globalIdx > 63)
+        {
+            Logger::writeToLog ("[LIBSYNC] Recall skipped: globalIdx " + String (globalIdx) + " out of range 0…63");
+            return;
+        }
+
+        const int bankMsb = globalIdx / 16;
+        const int bankLsb = 0;
+        const int program = globalIdx % 16;
+        const bool fullTriple = libraryRecallNeedsFullTriple (globalIdx);
+
+        if (fullTriple)
+        {
+            sendToOutputs (MidiMessage::controllerEvent (midiCh, 0, bankMsb));
+            sendToOutputs (MidiMessage::controllerEvent (midiCh, 32, bankLsb));
+        }
+
+        MidiMessage pc = MidiMessage::programChange (midiCh, program);
+        pc.setTimeStamp (Time::getMillisecondCounterHiRes() * 0.001);
+        sendToOutputs (pc);
+
+        libraryRecallContextBankMsb() = bankMsb;
+
+        if (fullTriple)
+        {
+            Logger::writeToLog ("[LIBSYNC] Recall external ch" + String (midiCh)
+                                + ": CC0=" + String (bankMsb)
+                                + " CC32=" + String (bankLsb)
+                                + " PC=" + String (program)
+                                + " (globalIdx=" + String (globalIdx) + ")");
+        }
+        else
+        {
+            Logger::writeToLog ("[LIBSYNC] Recall in-context ch" + String (midiCh)
+                                + ": PC=" + String (program)
+                                + " (bank MSB=" + String (bankMsb)
+                                + " globalIdx=" + String (globalIdx) + ")");
+        }
+    }
+
     void sendToOutputs (const MidiMessage& msg)
     {
         boolStopReceive = true; //shunt the midi in
 
+        bool sentAny = false;
+
         for (auto midiOutput : midiOutputs)
             if (midiOutput->outDevice.get() != nullptr)
             {
-
                 midiOutput->outDevice->sendMessageNow (msg);
+                sentAny = true;
                 Logger::writeToLog("Envoi msg midi");
                 Logger::writeToLog(String(msg.getDescription()) );
             }
+
+        if (! sentAny)
+        {
+            static bool loggedNoMidiOut = false;
+
+            if (! loggedNoMidiOut)
+            {
+                loggedNoMidiOut = true;
+                Logger::writeToLog ("[MIDI] No output port open — open Setting tab, "
+                                    "select your SY99 in MIDI Output list");
+            }
+        }
+
         boolStopReceive = false; //receive unShunt
     }
 
@@ -1023,12 +1311,12 @@ public:
     TextButton pairButton   { TRANS("MIDI Bluetooth devices...") };
     
     TextButton  btBulk {"Bulk Protect"};
-    std::unique_ptr<MidiDeviceListBox> midiInputSelector, midiOutputSelector;
     ReferenceCountedArray<MidiDeviceListEntry> midiInputs, midiOutputs;
-    
+    std::unique_ptr<MidiDeviceListBox> midiInputSelector, midiOutputSelector;
+
     CriticalSection midiMonitorLock;
     Array<MidiMessage> incomingMessages;
-    DemoTabbedComponent tabs;
+    std::unique_ptr<DemoTabbedComponent> tabs;
     Image imgBack;
     OSCSender   senderMidiIn;
 
@@ -1052,6 +1340,7 @@ public:
 
     TextButton btShowRealtime  { "Show realtime" };
     TextButton btShowSysExOnly { "SysEx only" };
+    TextButton btCopyMonitor   { "Copy" };
     TextButton btClearMonitor  { "Clear" };
 
     // THROTTLE: 30msg/sec limit — timestamp of the last outgoing parameter SysEx

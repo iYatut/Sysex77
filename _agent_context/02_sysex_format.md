@@ -86,7 +86,7 @@ F0 43 1n 34 gg hh ll pp 0V vv F7
 | `02 00 00 3f` | `MidiSysex.h` `oscTotalVoiceVolume`, `Voice.h` master | Общая громкость голоса. |
 | `02 00 00 00` | `MidiSysex.h` `adresseOpMode` | Режим операторов / голоса (значение в `[8]`). |
 | `02 00 00 01` | `Voice.h` (имя по символам) | Шаблон для посимвольной отправки имени (экспериментально). |
-| `03 00/20/40/60 00 08` | `MidiSysex.h` | Voice group по элементам. |
+| `03 00/20/40/60 00 08` | `MidiSysex.h` `oscVoiceGrp1..4` | **Output Group** (= MCTEN/OUTSEL; legacy name: Voice group). E1..E4: b4=`00`/`20`/`40`/`60`. OUTSEL VV: off=`0x00`, G1=`0x02`, G2=`0x04`, both=`0x06`. |
 | `03 .. 00 02` | `MidiSysex.h` | Pitch coarse по элементам. |
 | `03 .. 00 01` | `MidiSysex.h` | Fine по элементам. |
 | `07 00/20/40/60 00 02` | `MidiSysex.h` | «Fixed»/AWM-связанный параметр по элементам. |

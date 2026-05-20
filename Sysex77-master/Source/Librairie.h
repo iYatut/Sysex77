@@ -27,6 +27,7 @@
 
 #include "BankTableModel.h"
 #include "VoicesTableModel.h"
+#include "Sy99BulkLibraryCapture.h"
 
 
 struct LibrairiePage   : public Component,public Button::Listener, private Timer,public ChangeListener, public ChangeBroadcaster
@@ -58,6 +59,7 @@ struct LibrairiePage   : public Component,public Button::Listener, private Timer
         addAndMakeVisible (btExport);
         btExport.addListener (this);
         addAndMakeVisible (btSendVoice);
+        btSendVoice.setTooltip ("Writes to SY99 internal memory. Clicking voices / Prev / Next only opens in the editor.");
         btSendVoice.addListener (this);
         addAndMakeVisible (btRequestVoice);
         btRequestVoice.addListener (this);
@@ -70,6 +72,18 @@ struct LibrairiePage   : public Component,public Button::Listener, private Timer
         addAndMakeVisible(voicesListC);
         addAndMakeVisible(voicesListD);
         
+        libraryVoiceHighlightCallback() = [this] (int globalIdx)
+        {
+            highlightLibraryVoiceSlot (globalIdx);
+        };
+
+        libraryVoiceOpenedCallback() = [this] (int globalIdx, const String& voiceName)
+        {
+            labelInfoLine.setText ("Synced: \"" + voiceName.trimEnd()
+                                   + "\" (" + libraryVoiceSy99SlotCode (globalIdx) + ")",
+                                   dontSendNotification);
+        };
+
         btVoice.setToggleState(true, NotificationType::dontSendNotification);
         
         
@@ -113,13 +127,13 @@ struct LibrairiePage   : public Component,public Button::Listener, private Timer
         btMulti.setBounds (tableWidth + 94, 10,64,24);
         btSeq.setBounds (tableWidth + 168, 10,64,24);
 
-        btSendVoice.setBounds   (tableWidth + 244, 10, 84, 24);
-        btRequestVoice.setBounds(tableWidth + 332, 10, 96, 24);
-        btImport.setBounds      (tableWidth + 432, 10, 64, 24);
-        btExport.setBounds      (tableWidth + 500, 10, 64, 24);
+        btSendVoice.setBounds   (tableWidth + 244, 10, 96, 24);
+        btRequestVoice.setBounds(tableWidth + 344, 10, 96, 24);
+        btImport.setBounds      (tableWidth + 444, 10, 64, 24);
+        btExport.setBounds      (tableWidth + 512, 10, 64, 24);
 
         btSend.setBounds (getWidth()-74,10,64,24);
-        btReceive.setBounds(getWidth()-140, 10, 64, 24);
+        btReceive.setBounds(getWidth()-152, 10, 74, 24);
         btStop.setBounds(btReceive.getBounds());
         voicesListA.setBounds(tableWidth + 16, 44, tableWidth, getHeight()-44);
         voicesListB.setBounds(tableWidth + 26 + tableWidth, 44, tableWidth, getHeight()-44);
@@ -127,52 +141,156 @@ struct LibrairiePage   : public Component,public Button::Listener, private Timer
         voicesListD.setBounds(tableWidth + 46 + tableWidth+ tableWidth + tableWidth, 44, tableWidth, getHeight()-44);
         
         bankList.setBounds(8, 10, tableWidth, getHeight()-20);
+        labelInfoLine.setBounds (8, getHeight() - 22, getWidth() - 16, 18);
         
     }
     //==============================================================================
-    void timerCallback() override   // Timer of Sysex DUMP (receive sysex)
+    void timerCallback() override
     {
-        Logger::writeToLog("Timer : " + String(timeOut));
-        timeOut ++;
-        if(timeOut >20)
-        {
-            saveDump();
-        }
-    }
-    void saveDump()  //When Sysex is dumped
-    {
-        stopTimer();
-        btReceive.setEnabled(true);
-        btSend.setEnabled(true);
-        newMessage = false;
-        requestSysex = false;
-        btStop.setVisible(false);
+        ++timeOut;
 
-        if (arraySysex.size() == 0 || ! arraySysex[0].isSysEx())
+        if (requestSysex && ! arraySysex.isEmpty())
         {
-            labelInfoLine.setText ("Dump: no SysEx received", dontSendNotification);
+            Sy99BulkDumpAnalysis preview;
+            preview = analyzeCapturedSysexMessages (arraySysex);
+
+            labelInfoLine.setText ("Receiving… " + preview.makeSummaryLine()
+                                   + " (STOP when SY99 shows Completed)",
+                                   dontSendNotification);
+        }
+
+        const int threshold = bulkCaptureIdleThresholdTicks (arraySysex.size());
+
+        if (timeOut <= threshold)
+            return;
+
+        if (arraySysex.isEmpty())
+        {
+            if (bulkSessionMode == Sy99BulkCaptureSessionMode::continuous)
+            {
+                timeOut = 0;
+                return;
+            }
+
+            endBulkCaptureSession (false);
+            labelInfoLine.setText ("Dump: no SysEx received — check MIDI in + Bulk Protect",
+                                   dontSendNotification);
             return;
         }
 
-        auto stamp = Time::getCurrentTime().formatted ("DUMP-%Y%m%d-%H%M%S");
-        File myFile {(appDirPath.getFullPathName() + "/" + stamp + ".syx")};
-        if (myFile.existsAsFile())
-            myFile = myFile.getNonexistentSibling();
+        commitBufferedDumpToLibrary();
 
-        FileOutputStream fos (myFile);
-        for (auto& m : arraySysex)
+        if (bulkSessionMode == Sy99BulkCaptureSessionMode::continuous)
         {
-            Logger::writeToLog(m.getDescription());
-            fos.write(m.getRawData(), m.getRawDataSize());
+            timeOut = 0;
+            labelInfoLine.setText ("Saved " + String (bulkSessionSaveCount) + " file(s). "
+                                   + bulkCaptureInstructionForKind (bulkCaptureKind),
+                                   dontSendNotification);
+            return;
         }
-        fos.flush();
-        labelInfoLine.setText ("Dump saved: " + myFile.getFileName()
-                               + " (" + String (arraySysex.size()) + " msg)",
-                               dontSendNotification);
+
+        endBulkCaptureSession (true);
+    }
+
+    void beginBulkCapture (Sy99BulkCaptureKind kind,
+                           Sy99BulkCaptureSessionMode mode) noexcept
+    {
+        bulkCaptureKind = kind;
+        bulkSessionMode = mode;
+        bulkSessionSaveCount = 0;
+
         arraySysex.clear();
-        loadBankRequest = true; //Make a better code later!
-        sendChangeMessage();
-        repaint();
+        newMessage = false;
+        requestSysex = true;
+        timeOut = 0;
+
+        btReceive.setEnabled (false);
+        btRequestVoice.setEnabled (false);
+        btSend.setEnabled (false);
+        btStop.setVisible (true);
+        startTimer (500);
+
+        labelInfoLine.setText (bulkCaptureInstructionForKind (kind), dontSendNotification);
+        Logger::writeToLog ("[BulkRecv] Started kind="
+                            + String ((int) kind)
+                            + " mode=" + String ((int) mode));
+    }
+
+    bool commitBufferedDumpToLibrary() noexcept
+    {
+        if (arraySysex.isEmpty() || ! arraySysex[0].isSysEx())
+            return false;
+
+        Sy99BulkDumpAnalysis analysis;
+        const auto preview = analyzeCapturedSysexMessages (arraySysex);
+        const String prefix = (bulkCaptureKind == Sy99BulkCaptureKind::voiceSingle)
+                                  ? String ("VOICE1")
+                                  : preview.suggestFileBaseName();
+
+        const File saved = saveCapturedSysexToLibrary (arraySysex, prefix, &analysis);
+        arraySysex.clear();
+
+        if (! saved.existsAsFile())
+            return false;
+
+        ++bulkSessionSaveCount;
+        bankList.reloadAfterLibraryFileAdded();
+
+        labelInfoLine.setText ("Saved: " + saved.getFileName()
+                               + " (" + analysis.makeSummaryLine() + ")",
+                               dontSendNotification);
+        return true;
+    }
+
+    void endBulkCaptureSession (bool hadData) noexcept
+    {
+        stopTimer();
+        requestSysex = false;
+        newMessage = false;
+        timeOut = 0;
+        arraySysex.clear();
+
+        btReceive.setEnabled (true);
+        btRequestVoice.setEnabled (true);
+        btSend.setEnabled (true);
+        btStop.setVisible (false);
+
+        if (bulkSessionMode == Sy99BulkCaptureSessionMode::continuous && bulkSessionSaveCount > 0)
+        {
+            labelInfoLine.setText ("Receive finished: " + String (bulkSessionSaveCount)
+                                   + " file(s) in library",
+                                   dontSendNotification);
+        }
+        else if (! hadData && bulkSessionSaveCount == 0)
+        {
+            juce::ignoreUnused (hadData);
+        }
+
+        Logger::writeToLog ("[BulkRecv] Session ended, saved="
+                            + String (bulkSessionSaveCount));
+    }
+
+    void showReceiveFromSy99Menu()
+    {
+        PopupMenu menu;
+        menu.addItem (1, "64 Voice Bank  (SY99 menu 05:64 Voice)");
+        menu.addItem (2, "Single Voice   (SY99 menu 07:1 Voice)");
+        menu.addSeparator();
+        menu.addItem (3, "All dumps — continuous (each dump → .syx, STOP when done)");
+
+        menu.showMenuAsync (PopupMenu::Options().withTargetComponent (&btReceive),
+                            [this] (int result)
+        {
+            if (result == 1)
+                beginBulkCapture (Sy99BulkCaptureKind::voiceBank64,
+                                  Sy99BulkCaptureSessionMode::singleAutoClose);
+            else if (result == 2)
+                beginBulkCapture (Sy99BulkCaptureKind::voiceSingle,
+                                  Sy99BulkCaptureSessionMode::singleAutoClose);
+            else if (result == 3)
+                beginBulkCapture (Sy99BulkCaptureKind::receiveAll,
+                                  Sy99BulkCaptureSessionMode::continuous);
+        });
     }
     void buttonClicked (Button* button) override
     {
@@ -193,20 +311,21 @@ struct LibrairiePage   : public Component,public Button::Listener, private Timer
                 labelInfoLine.setText ("No bank selected", dontSendNotification);
             }
         }
-        else if(button == &btReceive)
+        else if (button == &btReceive)
         {
-            btReceive.setEnabled(false);
-            btSend.setEnabled(false);
-            newMessage = false;
-            requestSysex = true;
-            timeOut=0;
-            startTimer(500);
-            btStop.setVisible(true);
-            labelInfoLine.setText ("Receiving bulk dump…", dontSendNotification);
+            showReceiveFromSy99Menu();
         }
-        else if(button == &btStop)
+        else if (button == &btStop)
         {
-            saveDump(); //la fonction save dump vérifie la presence de sysex
+            const bool hadBuffered = arraySysex.size() > 0;
+
+            if (hadBuffered)
+                commitBufferedDumpToLibrary();
+            else
+                labelInfoLine.setText ("No SysEx captured — check MIDI In port + Bulk Protect OFF",
+                                       dontSendNotification);
+
+            endBulkCaptureSession (hadBuffered || bulkSessionSaveCount > 0);
         }
         else if (button == &btImport)
         {
@@ -227,8 +346,7 @@ struct LibrairiePage   : public Component,public Button::Listener, private Timer
                 {
                     labelInfoLine.setText ("Imported: " + dest.getFileName(),
                                            dontSendNotification);
-                    loadBankRequest = true;
-                    sendChangeMessage();
+                    bankList.reloadAfterLibraryFileAdded();
                 }
                 else
                 {
@@ -273,40 +391,54 @@ struct LibrairiePage   : public Component,public Button::Listener, private Timer
         {
             if (bankSelected.isEmpty())
             {
-                Logger::writeToLog ("[LIBSYNC] SEND VOICE: no bank selected");
-                labelInfoLine.setText ("SEND VOICE: select a bank first", dontSendNotification);
+                labelInfoLine.setText ("Select a bank file first", dontSendNotification);
                 return;
             }
+
             if (bankSelectedVoiceIndex < 0)
             {
-                Logger::writeToLog ("[LIBSYNC] SEND VOICE: no voice slot selected");
-                labelInfoLine.setText ("SEND VOICE: click a voice slot (A–D)", dontSendNotification);
+                labelInfoLine.setText ("Click a voice slot (A–D) to open it", dontSendNotification);
                 return;
             }
-            if (! sender.send (OSCAddressPattern (adresseOscSendVoice),
-                               bankSelected, (int32) bankSelectedVoiceIndex))
-            {
-                Logger::writeToLog ("[LIBSYNC] SEND VOICE: OSC send failed");
-                labelInfoLine.setText ("SEND VOICE: OSC send failed", dontSendNotification);
-            }
-            else
-            {
-                labelInfoLine.setText ("SEND VOICE -> slot " + String (bankSelectedVoiceIndex)
-                                       + " (" + bankSelected + ")", dontSendNotification);
-            }
+
+            const String target = libraryVoiceSy99InternalTarget (bankSelectedVoiceIndex);
+            const String voiceLabel = libraryVoiceSlotLabel (bankSelectedVoiceIndex);
+
+            AlertWindow::showOkCancelBox (
+                AlertWindow::WarningIcon,
+                "Write voice to SY99 internal memory?",
+                "This overwrites " + target + " on the synthesizer (\"" + voiceLabel + "\").\n\n"
+                "Browsing / Prev / Next only opens the voice in the editor and does not send MIDI.\n\n"
+                "Continue?",
+                "Write to SY99",
+                "Cancel",
+                this,
+                ModalCallbackFunction::create ([this, target, voiceLabel] (int result)
+                {
+                    if (result != 1)
+                    {
+                        labelInfoLine.setText ("Write cancelled — \"" + voiceLabel
+                                               + "\" still open in editor only",
+                                               dontSendNotification);
+                        return;
+                    }
+
+                    if (! sender.send (OSCAddressPattern (adresseOscSendVoice),
+                                       bankSelected, (int32) bankSelectedVoiceIndex))
+                    {
+                        labelInfoLine.setText ("Write to SY99 failed (OSC)", dontSendNotification);
+                        return;
+                    }
+
+                    labelInfoLine.setText ("Written to SY99 " + target
+                                           + " — select that voice on the synth to play",
+                                           dontSendNotification);
+                }));
         }
         else if (button == &btRequestVoice)
         {
-            btReceive.setEnabled(false);
-            btSend.setEnabled(false);
-            newMessage = false;
-            requestSysex = true;
-            timeOut = 0;
-            startTimer (500);
-            btStop.setVisible (true);
-            labelInfoLine.setText ("Request voice: press DUMP OUT on SY99 → "
-                                   "Edit Voice / Voice Common (1 dump)",
-                                   dontSendNotification);
+            beginBulkCapture (Sy99BulkCaptureKind::voiceSingle,
+                              Sy99BulkCaptureSessionMode::singleAutoClose);
         }
     }
     
@@ -325,14 +457,36 @@ private:
         textButton.setColour(TextButton::ColourIds::buttonOnColourId, Colours::red);
         addAndMakeVisible (textButton);
     }
+
+    void highlightLibraryVoiceSlot (int globalIdx) noexcept
+    {
+        voicesListA.sourceListBox.deselectAllRows();
+        voicesListB.sourceListBox.deselectAllRows();
+        voicesListC.sourceListBox.deselectAllRows();
+        voicesListD.sourceListBox.deselectAllRows();
+
+        if (globalIdx < 0 || globalIdx >= arrayListVoices.size())
+            return;
+
+        const int row = globalIdx % 16;
+
+        switch (globalIdx / 16)
+        {
+            case 0: voicesListA.sourceListBox.selectRow (row); break;
+            case 1: voicesListB.sourceListBox.selectRow (row); break;
+            case 2: voicesListC.sourceListBox.selectRow (row); break;
+            case 3: voicesListD.sourceListBox.selectRow (row); break;
+            default: break;
+        }
+    }
     Label labelInfoLine {"","Test Info Line -- -- -- -- -- -- -- -- -- -- --"};
     TextButton btSend {TRANS("SEND BANK->")};
-    TextButton btReceive {TRANS("RECEIVE BANK <-")};
+    TextButton btReceive {TRANS("FROM SY99 <-")};
     TextButton btStop {"STOP"};
 
     TextButton btImport     {TRANS("IMPORT")};
     TextButton btExport     {TRANS("EXPORT")};
-    TextButton btSendVoice  {TRANS("SEND VOICE")};
+    TextButton btSendVoice  { TRANS ("WRITE SY99") };
     TextButton btRequestVoice {TRANS("REQUEST VOICE")};
 
     std::unique_ptr<FileChooser> chooser;
@@ -356,6 +510,10 @@ private:
     
     int numRows;
     OSCSender sender;  // [2]
+
+    Sy99BulkCaptureKind bulkCaptureKind { Sy99BulkCaptureKind::voiceBank64 };
+    Sy99BulkCaptureSessionMode bulkSessionMode { Sy99BulkCaptureSessionMode::singleAutoClose };
+    int bulkSessionSaveCount = 0;
     
 };
 //==============================================================================

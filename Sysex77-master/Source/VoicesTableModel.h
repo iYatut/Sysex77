@@ -10,19 +10,394 @@
 
 #pragma once
 
+#include <functional>
+
 #include "../JuceLibraryCode/JuceHeader.h"
+#include "LiveSynthState.h"
 
 //==============================================================================
 // [LIBSYNC] slotInBank 0..15, bankOffset 0|16|32|48 → global index 0..63
-static inline void selectLibraryVoiceSlot (int slotInBank, int bankOffset)
+static inline String libraryVoiceSlotLabel (int globalIdx) noexcept
+{
+    if (globalIdx < 0 || globalIdx >= arrayListVoices.size())
+        return {};
+
+    return arrayListVoices[globalIdx].trimEnd();
+}
+
+inline std::function<void (int)>& libraryVoiceHighlightCallback() noexcept
+{
+    static std::function<void (int)> cb;
+    return cb;
+}
+
+/** UI feedback when a library slot is opened in the editor (no MIDI out). */
+inline std::function<void (int globalIdx, const juce::String& voiceName)>& libraryVoiceOpenedCallback() noexcept
+{
+    static std::function<void (int, const juce::String&)> cb;
+    return cb;
+}
+
+/** Last Bank Select MSB (CC0) seen on channel 1 — used with inbound PC to map slot 0…15 → bank A–D. */
+inline int& inboundLibraryBankMsb() noexcept
+{
+    static int msb = 0;
+    return msb;
+}
+
+/** Last Bank Select LSB (CC32) seen on channel 1 (logged; SY99 internal recall uses MSB + PC). */
+inline int& inboundLibraryBankLsb() noexcept
+{
+    static int lsb = 0;
+    return lsb;
+}
+
+/** Last Program Change slot 0…15 on channel 1 (paired with inboundLibraryBankMsb). -1 = never seen. */
+inline int& inboundLibraryProgramSlot() noexcept
+{
+    static int slot = -1;
+    return slot;
+}
+
+/** Client edit context: bankSelectedVoiceIndex when a bank is loaded and index is in range. */
+inline int resolveCurrentEditorVoiceGlobalIdx() noexcept
+{
+    const int idx = bankSelectedVoiceIndex;
+
+    if (idx < 0)
+        return -1;
+
+    if (bankSelected.isEmpty() || arrayListVoices.isEmpty())
+        return -1;
+
+    if (idx >= arrayListVoices.size())
+        return -1;
+
+    return idx;
+}
+
+/** Internal bank (MSB 0…3) for which a full CC0+CC32+PC recall was last done from the app.
+    -1 = unknown / external — next recall sends the full triple. Not SY99 edit state (not observable in MIDI). */
+inline int& libraryRecallContextBankMsb() noexcept
+{
+    static int msb = -1;
+    return msb;
+}
+
+inline void resetLibraryRecallContext() noexcept
+{
+    libraryRecallContextBankMsb() = -1;
+}
+
+/** true → send CC0+CC32+PC; false → PC only (same MSB as established context). */
+inline bool libraryRecallNeedsFullTriple (int globalIdx) noexcept
+{
+    if (globalIdx < 0 || globalIdx > 63)
+        return true;
+
+    const int ctx = libraryRecallContextBankMsb();
+    return ctx < 0 || ctx != (globalIdx / 16);
+}
+
+/** Recall on SY99 (mode chosen in MidiDemo::sendLibraryVoiceRecallToSynth). */
+inline std::function<void (int globalIdx)>& libraryVoiceProgramChangeCallback() noexcept
+{
+    static std::function<void (int)> cb;
+    return cb;
+}
+
+/** Common tab → Voice tab: full CC0+CC32+PC recall for current editor voice (MidiDemo::sendVoiceTabRecallFromCommonEdit). */
+inline std::function<void()>& voiceTabRecallFromCommonCallback() noexcept
+{
+    static std::function<void()> cb;
+    return cb;
+}
+
+/** Skip outbound PC when the selection came from an incoming SY99 Program Change. */
+inline bool& libraryVoiceSuppressProgramChangeSend() noexcept
+{
+    static bool suppress = false;
+    return suppress;
+}
+
+/** Ignore inbound PC echo right after we sent recall (CC0+CC32+PC). */
+struct LibraryVoiceProgramChangeEchoGuard
+{
+    int lastGlobalIdx = -1;
+    juce::uint32 sentAtMs = 0;
+};
+
+inline LibraryVoiceProgramChangeEchoGuard& libraryVoiceProgramChangeEchoGuard() noexcept
+{
+    static LibraryVoiceProgramChangeEchoGuard g;
+    return g;
+}
+
+// --- Editor patch dirty / exit gate (phase 1) ---
+
+inline bool& editorPatchDirty() noexcept
+{
+    static bool dirty = false;
+    return dirty;
+}
+
+inline std::function<void()>& pendingEditorExitAction() noexcept
+{
+    static std::function<void()> action;
+    return action;
+}
+
+/** Blocks tryLeaveEditorContext and tab gate while completing deferred navigation. */
+inline bool& suppressEditorExitPrompt() noexcept
+{
+    static bool suppress = false;
+    return suppress;
+}
+
+/** Blocks markEditorPatchDirty during applyLiveSynthState / inbound refresh. */
+inline bool& suppressEditorPatchDirtyMark() noexcept
+{
+    static bool suppress = false;
+    return suppress;
+}
+
+inline void markEditorPatchDirty() noexcept
+{
+    if (! suppressEditorPatchDirtyMark())
+        editorPatchDirty() = true;
+}
+
+/** SY99 internal voice grid: banks A–D × 16 programs (global index 0…63). */
+inline constexpr int kSy99LibraryVoiceSlotCount = 64;
+
+/** Display label "A1" … "D16" for a global slot (independent of .syx frame count). */
+inline String libraryVoiceSy99SlotCode (int globalIdx) noexcept
+{
+    if (globalIdx < 0 || globalIdx >= kSy99LibraryVoiceSlotCount)
+        return {};
+
+    static const char banks[] = "ABCD";
+    const int bankIdx = globalIdx / 16;
+    const int voiceNo = (globalIdx % 16) + 1;
+    return String (banks[bankIdx]) + String (voiceNo);
+}
+
+/** List row: slot code + voice name from .syx when present. */
+inline String libraryVoiceListCellText (int globalIdx) noexcept
+{
+    const String code = libraryVoiceSy99SlotCode (globalIdx);
+    const String name = libraryVoiceSlotLabel (globalIdx);
+
+    if (code.isEmpty())
+        return name;
+
+    if (name.isEmpty())
+        return code;
+
+    return code + "  " + name;
+}
+
+inline void clearEditorPatchDirty() noexcept
+{
+    editorPatchDirty() = false;
+}
+
+/** Wired from MidiDemo to VoicePage::commitEditorSessionToLiveSynthBaseline(). */
+inline std::function<void()>& commitEditorSessionToLiveSynthBaselineCallback() noexcept
+{
+    static std::function<void()> cb;
+    return cb;
+}
+
+inline bool executeEditorExitActionOnce (const std::function<void()>& action) noexcept
+{
+    if (! action)
+        return true;
+
+    suppressEditorExitPrompt() = true;
+    bool completed = false;
+
+    try
+    {
+        action();
+        completed = true;
+    }
+    catch (...) {}
+
+    suppressEditorExitPrompt() = false;
+
+    if (completed)
+        clearEditorPatchDirty();
+
+    return completed;
+}
+
+inline void runPendingEditorExitActionOnce() noexcept
+{
+    auto action = pendingEditorExitAction();
+    pendingEditorExitAction() = nullptr;
+    executeEditorExitActionOnce (action);
+}
+
+inline bool tryLeaveEditorContext (std::function<void()> onProceed)
+{
+    if (! onProceed)
+        return true;
+
+    if (! editorPatchDirty() || suppressEditorExitPrompt())
+        return executeEditorExitActionOnce (onProceed);
+
+    pendingEditorExitAction() = std::move (onProceed);
+
+    auto* alert = new AlertWindow (TRANS ("Unsaved editor changes"),
+                                    TRANS ("Common/Mixer edits are on the SY99 but the editor baseline was not updated.\n"
+                                           "Save updates the app baseline only (no MIDI, no .syx file)."),
+                                    AlertWindow::WarningIcon);
+
+    alert->addButton (TRANS ("Save"),  1, KeyPress (KeyPress::returnKey));
+    alert->addButton (TRANS ("Apply"), 2);
+    alert->addButton (TRANS ("Cancel"), 0, KeyPress (KeyPress::escapeKey));
+
+    alert->enterModalState (true,
+        ModalCallbackFunction::create ([alert] (int result)
+        {
+            std::unique_ptr<AlertWindow> deleter (alert);
+
+            if (result == 0)
+            {
+                pendingEditorExitAction() = nullptr;
+                return;
+            }
+
+            if (result == 1)
+            {
+                if (auto& commit = commitEditorSessionToLiveSynthBaselineCallback(); commit != nullptr)
+                    commit();
+            }
+
+            runPendingEditorExitActionOnce();
+        }),
+        true);
+
+    return false;
+}
+
+/** Open library voice in editor + optional SY99 recall MIDI (no bulk write). */
+static inline void selectLibraryVoiceSlotProceed (int slotInBank, int bankOffset)
 {
     const int globalIdx = bankOffset + slotInBank;
     bankSelectedVoiceIndex = globalIdx;
-    if (globalIdx >= 0 && globalIdx < arrayListVoices.size())
+    clearEditorPatchDirty();
+
+    const bool parsed = ingestLm8101FromBankVoiceSlotAndLog (globalIdx, bankSelected,
+                                         voiceSysexFileOffsets, voiceSysexFileLengths);
+
+    String notifyName;
+
+    if (parsed && getLiveSynthState().lmVoiceName[0] != '\0')
+        notifyName = String (getLiveSynthState().lmVoiceName).trimEnd();
+    else
+        notifyName = libraryVoiceSlotLabel (globalIdx);
+
+    if (parsed || notifyName.isNotEmpty())
     {
-        bankSelectedVoiceName = arrayListVoices[globalIdx].trimEnd();
+        bankSelectedVoiceName = notifyName;
         bankSelectedVoiceNameValue.setValue (juce::var (bankSelectedVoiceName));
     }
+
+    bankVoiceSlotApplyTrigger.setValue (++bankVoiceSlotApplyNonce);
+
+    if (auto& highlight = libraryVoiceHighlightCallback(); highlight != nullptr)
+        highlight (globalIdx);
+
+    if (auto& opened = libraryVoiceOpenedCallback(); opened != nullptr)
+        opened (globalIdx, notifyName);
+
+    if (! libraryVoiceSuppressProgramChangeSend())
+    {
+        if (auto& programChange = libraryVoiceProgramChangeCallback(); programChange != nullptr)
+            programChange (globalIdx);
+    }
+}
+
+static inline void selectLibraryVoiceSlot (int slotInBank, int bankOffset)
+{
+    if (libraryVoiceSuppressProgramChangeSend())
+    {
+        selectLibraryVoiceSlotProceed (slotInBank, bankOffset);
+        return;
+    }
+
+    tryLeaveEditorContext ([=]
+    {
+        selectLibraryVoiceSlotProceed (slotInBank, bankOffset);
+    });
+}
+
+/** SY99 → PC (+ prior CC0 on ch1): recall the matching library slot A–D. */
+static inline void handleIncomingLibraryProgramChange (int programNumber, int midiChannel) noexcept
+{
+    if (midiChannel != 1 || programNumber < 0)
+        return;
+
+    if (bankSelected.isEmpty() || arrayListVoices.isEmpty())
+        return;
+
+    const int slotInBank = programNumber % 16;
+    const int bankOffset = inboundLibraryBankMsb() * 16;
+    const int globalFromInbound = bankOffset + slotInBank;
+
+    if (globalFromInbound >= arrayListVoices.size())
+        return;
+
+    auto& echo = libraryVoiceProgramChangeEchoGuard();
+    const juce::uint32 now = juce::Time::getMillisecondCounter();
+
+    if (echo.lastGlobalIdx >= 0 && now - echo.sentAtMs < 120
+        && slotInBank == (echo.lastGlobalIdx % 16)
+        && bankOffset == (echo.lastGlobalIdx / 16) * 16)
+        return;
+
+    if (globalFromInbound == bankSelectedVoiceIndex)
+        return;
+
+    libraryVoiceSuppressProgramChangeSend() = true;
+    selectLibraryVoiceSlot (slotInBank, bankOffset);
+    libraryVoiceSuppressProgramChangeSend() = false;
+}
+
+/** Step through voices in the loaded bank file (0…63). Used from Voice tab ◀ ▶ / arrow keys. */
+static inline void stepLibraryVoiceSlot (int delta) noexcept
+{
+    if (arrayListVoices.isEmpty() || bankSelected.isEmpty() || delta == 0)
+        return;
+
+    int idx = bankSelectedVoiceIndex;
+
+    if (idx < 0)
+        idx = (delta > 0) ? 0 : (kSy99LibraryVoiceSlotCount - 1);
+    else
+        idx = (idx + delta + kSy99LibraryVoiceSlotCount) % kSy99LibraryVoiceSlotCount;
+
+    const int slotInBank = idx % 16;
+    const int bankOffset = (idx / 16) * 16;
+
+    tryLeaveEditorContext ([=]
+    {
+        selectLibraryVoiceSlotProceed (slotInBank, bankOffset);
+    });
+}
+
+/** Human label for where a 05:64 bulk frame lands on SY99 internal memory. */
+static inline String libraryVoiceSy99InternalTarget (int globalIdx) noexcept
+{
+    if (globalIdx < 0)
+        return {};
+
+    static const char banks[] = "ABCD";
+    const int bankIdx = jlimit (0, 3, globalIdx / 16);
+    const int voiceNo = (globalIdx % 16) + 1;
+    return "Bank " + String (banks[bankIdx]) + " voice " + String (voiceNo);
 }
 
 //==============================================================================
@@ -79,8 +454,10 @@ private:
                     
                     g.setColour (LookAndFeel::getDefaultLookAndFeel().findColour (Label::textColourId));
                     g.setFont (height * 0.7f);
-                    if(arrayListVoices[rowNumber].isNotEmpty())
-                    g.drawFittedText(arrayListVoices[rowNumber], 0, 0, width, height, Justification::centred, 1);
+                    const String label = libraryVoiceListCellText (rowNumber);
+
+                    if (label.isNotEmpty())
+                        g.drawFittedText (label, 0, 0, width, height, Justification::centred, 1);
                         
                         
                     }
@@ -128,6 +505,8 @@ private:
     
 public: void loadBank()
     {
+        sourceListBox.updateContent();
+        sourceListBox.repaint();
         repaint();
 /*
         if(!appDirPath.exists())
@@ -290,8 +669,10 @@ private:
                     g.setFont (height * 0.7f);
                     
                     //    auto text = arrayBank[rowNumber] ;
-                    if(arrayListVoices[rowNumber+16].isNotEmpty())
-                        g.drawFittedText(arrayListVoices[rowNumber+16], 0, 0, width, height, Justification::centred, 1);
+                    const String label = libraryVoiceListCellText (rowNumber + 16);
+
+                    if (label.isNotEmpty())
+                        g.drawFittedText (label, 0, 0, width, height, Justification::centred, 1);
                  //   g.drawFittedText(arrayBank[rowNumber], 0, 0, width, height, Justification::centred, 1);
                 /*
                  g.drawText ("Aucunes Banques" + String (rowNumber + 1),
@@ -343,6 +724,8 @@ private:
     
 public:    void loadBank()
     {
+        sourceListBox.updateContent();
+        sourceListBox.repaint();
         repaint();
         
     }
@@ -444,10 +827,10 @@ private:
                     g.setColour (LookAndFeel::getDefaultLookAndFeel().findColour (Label::textColourId));
                     g.setFont (height * 0.7f);
                     
-                    //    auto text = arrayBank[rowNumber] ;
-                    
-                    if(arrayListVoices[rowNumber+32].isNotEmpty())
-                        g.drawFittedText(arrayListVoices[rowNumber+32], 0, 0, width, height, Justification::centred, 1);
+                    const String label = libraryVoiceListCellText (rowNumber + 32);
+
+                    if (label.isNotEmpty())
+                        g.drawFittedText (label, 0, 0, width, height, Justification::centred, 1);
                         
                 /*
                  g.drawText ("Aucunes Banques" + String (rowNumber + 1),
@@ -499,9 +882,9 @@ private:
     
 public:    void loadBank()
     {
+        sourceListBox.updateContent();
+        sourceListBox.repaint();
         repaint();
-        
-        
     }
     
     
@@ -600,10 +983,10 @@ private:
                     g.setColour (LookAndFeel::getDefaultLookAndFeel().findColour (Label::textColourId));
                     g.setFont (height * 0.7f);
                     
-                    //    auto text = arrayBank[rowNumber] ;
-                    
-                    if(arrayListVoices[rowNumber+48].isNotEmpty())
-                        g.drawFittedText(arrayListVoices[rowNumber+48], 0, 0, width, height, Justification::centred, 1);
+                    const String label = libraryVoiceListCellText (rowNumber + 48);
+
+                    if (label.isNotEmpty())
+                        g.drawFittedText (label, 0, 0, width, height, Justification::centred, 1);
                         
                 /*
                  g.drawText ("Aucunes Banques" + String (rowNumber + 1),
@@ -656,8 +1039,9 @@ private:
     
 public:    void loadBank()
     {
+        sourceListBox.updateContent();
+        sourceListBox.repaint();
         repaint();
-        
     }
     
     

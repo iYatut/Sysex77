@@ -38,6 +38,7 @@
         <FILE id="EnAkma" name="Volume.h" compile="0" resource="0" file="Source/Volume.h"/>
         <FILE id="RSGc0q" name="Pan.h" compile="0" resource="0" file="Source/Pan.h"/>
         <FILE id="EJGSPH" name="Element.h" compile="0" resource="0" file="Source/Element.h"/>
+        <FILE id="MxSc01" name="MixerSection.h" compile="0" resource="0" file="Source/MixerSection.h"/>
         <FILE id="h52Pvb" name="Pitch.h" compile="0" resource="0" file="Source/Pitch.h"/>
       </GROUP>
       <GROUP id="{1CCFC3A1-B050-FAFA-BFCD-7F98672DE299}" name="Libraririe">
@@ -71,6 +72,14 @@
         <FILE id="Fv5G3Q" name="Hook.h" compile="0" resource="0" file="Source/Hook.h"/>
       </GROUP>
       <FILE id="yBkFWt" name="MidiSysex.h" compile="0" resource="0" file="Source/MidiSysex.h"/>
+      <FILE id="LmDmp01" name="YamahaLmVoiceDump.h" compile="0" resource="0"
+            file="Source/YamahaLmVoiceDump.h"/>
+      <FILE id="LvSt01" name="LiveSynthState.h" compile="0" resource="0"
+            file="Source/LiveSynthState.h"/>
+      <FILE id="Sy99RegH" name="Sy99ParamRegistry.h" compile="0" resource="0"
+            file="Source/Sy99ParamRegistry.h"/>
+      <FILE id="Sy99RegC" name="Sy99ParamRegistry.cpp" compile="1" resource="0"
+            file="Source/Sy99ParamRegistry.cpp"/>
       <FILE id="KSWPHc" name="Values.h" compile="0" resource="0" file="Source/Values.h"/>
       <FILE id="MVtIs5" name="ValueTrees.h" compile="0" resource="0" file="Source/ValueTrees.h"/>
       <FILE id="nY6taA" name="Main.cpp" compile="1" resource="0" file="Source/Main.cpp"/>

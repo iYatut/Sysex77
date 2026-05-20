@@ -96,6 +96,217 @@ F0  43  10  34  [b3]  [b4]  [b5]  [b6]  [b7]  [b8]  F7
 
 ---
 
+## Блок 0x03 — Element Level / ELVL (NN `0x00`)
+
+| Element | b4 (EE) | Address |
+|---------|---------|---------|
+| E1      | `0x00`  | `03 00 00 00` |
+| E2      | `0x20`  | `03 20 00 00` |
+| E3      | `0x40`  | `03 40 00 00` |
+| E4      | `0x60`  | `03 60 00 00` |
+
+Кадр: `F0 43 10 34 03 EE 00 00 00 [VV] F7`
+
+| Поле | Значение |
+|------|----------|
+| UI range | 0 … 127 |
+| ValueTree | `ELEMENTnVOLUME` |
+| transport | `sliderMixerEl1Level` … `sliderMixerEl4Level` |
+| status | **CONFIRMED WORKING** (2026-05-19) |
+
+Журнал: `04_observed_logs.md` § *Element Level*.
+
+---
+
+## Блок 0x03 — Element Detune / ELDT (NN `0x01`)
+
+| Element | b4 (EE) | Address |
+|---------|---------|---------|
+| E1      | `0x00`  | `03 00 00 01` |
+| E2      | `0x20`  | `03 20 00 01` |
+| E3      | `0x40`  | `03 40 00 01` |
+| E4      | `0x60`  | `03 60 00 01` |
+
+Кадр: `F0 43 10 34 03 EE 00 01 00 [VV] F7`
+
+| Поле | Значение |
+|------|----------|
+| UI range | −7 … +7 |
+| ValueTree | `ELEMENTnFINE` |
+| transport | `Pitch::sliderFine` (+ Mixer row via reparent) |
+| status | **CONFIRMED WORKING** (2026-05-19) |
+
+Журнал: `04_observed_logs.md` § *Element Detune*.
+
+---
+
+## Блок 0x03 — Element Note Shift / ELNS (NN `0x02`)
+
+| Element | b4 (EE) | Address |
+|---------|---------|---------|
+| E1      | `0x00`  | `03 00 00 02` |
+| E2      | `0x20`  | `03 20 00 02` |
+| E3      | `0x40`  | `03 40 00 02` |
+| E4      | `0x60`  | `03 60 00 02` |
+
+Кадр: `F0 43 10 34 03 EE 00 02 00 [VV] F7`
+
+| Поле | Значение |
+|------|----------|
+| UI range | −64 … +63 |
+| VV range | 0 … 127 |
+| conversion | UI→VV: `VV = UI + 64`; VV→UI: `VV − 64` (with clamp) |
+| ValueTree | `ELEMENTnPITCH` |
+| transport | `Pitch::sliderPitch` + signed encode in `MidiObjects.h` |
+| status | **CONFIRMED WORKING** (2026-05-19) |
+
+Журнал: `04_observed_logs.md` § *Element Note Shift*.
+
+---
+
+## Блок 0x03 — Element Note Limit Low / ENLL (NN `0x03`)
+
+| Element | b4 (EE) | Address |
+|---------|---------|---------|
+| E1      | `0x00`  | `03 00 00 03` |
+| E2      | `0x20`  | `03 20 00 03` |
+| E3      | `0x40`  | `03 40 00 03` |
+| E4      | `0x60`  | `03 60 00 03` |
+
+Кадр: `F0 43 10 34 03 EE 00 03 00 [VV] F7`
+
+| Поле | Значение |
+|------|----------|
+| UI range | 0 … 127 |
+| UI display | `MidiMessage::getMidiNoteName(note, true, true, 3)` |
+| ValueTree | `ELEMENTnNOTELIMITLOW` |
+| transport | `sliderMixerEl1NoteLimitLow` … `sliderMixerEl4NoteLimitLow` |
+| status | **IMPLEMENTED** (2026-05-20); live SY99 test pending |
+
+Журнал: `04_observed_logs.md` § *Element Note Limit Low*.
+
+---
+
+## Блок 0x03 — Element Note Limit High / ENLH (NN `0x04`)
+
+| Element | b4 (EE) | Address |
+|---------|---------|---------|
+| E1      | `0x00`  | `03 00 00 04` |
+| E2      | `0x20`  | `03 20 00 04` |
+| E3      | `0x40`  | `03 40 00 04` |
+| E4      | `0x60`  | `03 60 00 04` |
+
+Кадр: `F0 43 10 34 03 EE 00 04 00 [VV] F7`
+
+| Поле | Значение |
+|------|----------|
+| UI range | 0 … 127 |
+| UI display | `MidiMessage::getMidiNoteName(note, true, true, 3)` |
+| ValueTree | `ELEMENTnNOTELIMITHIGH` |
+| transport | `sliderMixerEl1NoteLimitHigh` … `sliderMixerEl4NoteLimitHigh` |
+| status | **IMPLEMENTED** (2026-05-20); live SY99 test pending |
+
+Журнал: `04_observed_logs.md` § *Element Note Limit High*.
+
+---
+
+## Блок 0x03 — Element Velocity Limit Low / EVLL (NN `0x05`)
+
+| Element | b4 (EE) | Address |
+|---------|---------|---------|
+| E1      | `0x00`  | `03 00 00 05` |
+| E2      | `0x20`  | `03 20 00 05` |
+| E3      | `0x40`  | `03 40 00 05` |
+| E4      | `0x60`  | `03 60 00 05` |
+
+Кадр: `F0 43 10 34 03 EE 00 05 00 [VV] F7`
+
+| Поле | Значение |
+|------|----------|
+| UI range | 0 … 127 |
+| ValueTree | `ELEMENTnVELOCITYLIMITLOW` |
+| transport | `sliderMixerEl1VelocityLimitLow` … `sliderMixerEl4VelocityLimitLow` |
+| status | **IMPLEMENTED** (2026-05-20); live SY99 test pending |
+
+Журнал: `04_observed_logs.md` § *Element Velocity Limit Low*.
+
+---
+
+## Блок 0x03 — Element Velocity Limit High / EVLH (NN `0x06`)
+
+| Element | b4 (EE) | Address |
+|---------|---------|---------|
+| E1      | `0x00`  | `03 00 00 06` |
+| E2      | `0x20`  | `03 20 00 06` |
+| E3      | `0x40`  | `03 40 00 06` |
+| E4      | `0x60`  | `03 60 00 06` |
+
+Кадр: `F0 43 10 34 03 EE 00 06 00 [VV] F7`
+
+| Поле | Значение |
+|------|----------|
+| UI range | 0 … 127 |
+| ValueTree | `ELEMENTnVELOCITYLIMITHIGH` |
+| transport | `sliderMixerEl1VelocityLimitHigh` … `sliderMixerEl4VelocityLimitHigh` |
+| status | **IMPLEMENTED** (2026-05-20); live SY99 test pending |
+
+Журнал: `04_observed_logs.md` § *Element Velocity Limit High*.
+
+---
+
+## Блок 0x03 — Output Group / MCTEN/OUTSEL (NN `0x08`)
+
+> **Name cross-reference (same parameter):**
+> - **UI name:** Output Group
+> - **Technical / manual name:** MCTEN/OUTSEL (transcription also lists MCTEN/OUTOSEL/OUT1SEL)
+> - **Legacy project name:** Voice group (`oscVoiceGrp1..4` in `MidiSysex.h`)
+>
+> **Element 1 address:** `03 00 00 08`  
+> **Elements 2–4:** same NN, element offset in `b4`:
+>
+> | Element | b4 (EE) | Address `[b3 b4 b5 b6]` |
+> |---------|---------|-------------------------|
+> | E1      | `0x00`  | `03 00 00 08`           |
+> | E2      | `0x20`  | `03 20 00 08`           |
+> | E3      | `0x40`  | `03 40 00 08`           |
+> | E4      | `0x60`  | `03 60 00 08`           |
+>
+> Кадр E1: `F0 43 10 34 03 00 00 08 00 [VV] F7`
+
+### OUTSEL — подтверждённый 4-state mapping (`b8` / VV)
+
+| UI state | VV   | Notes                          |
+|----------|------|--------------------------------|
+| off      | `0x00` | обе группы выключены           |
+| G1       | `0x02` | Group 1 (bit `0x02`)           |
+| G2       | `0x04` | Group 2 (bit `0x04`)           |
+| both     | `0x06` | обе группы (`outselMask 0x06`) |
+
+Байт bit-packed: биты MCTEN могут делить тот же `b8` с OUTSEL — для переключения групп нужен **read-modify-write** полного байта.
+
+> ⚠ **Journal note:** до 2026-05-19 `_agent_context` перечислял параметр по адресу и имени
+> (MCTEN/OUTSEL / «Voice group»), но **не документировал** 4-state mapping OUTSEL (`0x00` /
+> `0x02` / `0x04` / `0x06`). Добавлено по подтверждению с железа при реализации Mixer Output Group El.1.
+
+### Reference binding pattern (WORKING — use for future SY99 bindings)
+
+| Поле | Значение |
+|------|----------|
+| **UI name** | Output Group El.1 |
+| **technical/manual name** | MCTEN/OUTSEL |
+| **address** | `03 00 00 08` |
+| **full SysEx** | `F0 43 1n 34 03 00 00 08 00 VV F7` |
+| **ValueTree property** | `ELEMENT1OUTSEL` |
+| **transport control** | `sliderMixerEl1Outsel` |
+| **mapping** | off=`0x00`, G1=`0x02`, G2=`0x04`, both=`0x06` |
+| **inbound** | `valueSysexIn` → `MidiSlider::valueChanged` → `ValueTree` → UI binding |
+| **outbound** | UI → `setValue` → `sliderValueChanged` → `/SYSEX` → `sendToOutputs` |
+| **status** | confirmed working reference pattern |
+
+Полная запись журнала: `04_observed_logs.md` § *Reference binding pattern*.
+
+---
+
 ## Адреса, которые выглядят как одно, но являются другим
 
 Эти паттерны встречаются в старых/архивных дампах файла `MIDI_MAP_OBSERVATIONS.md`  
@@ -105,7 +316,7 @@ F0  43  10  34  [b3]  [b4]  [b5]  [b6]  [b7]  [b8]  F7
 |-------------|-----------------|----------------|
 | `0x07` / `0x06` | Старый HT Pan (до фикса буфера) | `0x0A` / `0x02` |
 | `0x03` / `0x07` | Старый R1 Pan (архив) | `0x0A` / `0x03` |
-| `0x03` / `0x08` | Короткий фрагмент, без имени | нет данных |
+| `0x03` / `0x08` | Короткий фрагмент в архиве без имени | **MCTEN/OUTSEL / Output Group** — см. блок 0x03 NN `0x08` выше |
 
 ### ⚠ Специальный случай: адрес `0x02` / `0x42`
 
@@ -122,6 +333,10 @@ F0  43  10  34  [b3]  [b4]  [b5]  [b6]  [b7]  [b8]  F7
 
 | Использовать | Не использовать |
 |-------------|-----------------|
-| Блок `0x0A` полностью (все Rate/Level/SLP/Source) | `0x07`/`06`, `0x03`/`07`, `0x03`/`08` |
+| Блок `0x0A` полностью (все Rate/Level/SLP/Source) | `0x07`/`06`, `0x03`/`07` |
+| Блок `0x03` NN `00` (ELVL Level; E1..E4) | |
+| Блок `0x03` NN `01` (ELDT Detune; E1..E4) | |
+| Блок `0x03` NN `02` (ELNS Note Shift; E1..E4) | |
+| Блок `0x03` NN `08` (Output Group / MCTEN/OUTSEL; E1..E4) | |
 | Блок `0x56`: R1, R2, HT | `0x56`/`1B` (фрагмент) |
 | Блок `0x07`: R2 E1 (`50`) и R2 E3 (`51`) | `0x07`/`4F` (неподтверждено) |

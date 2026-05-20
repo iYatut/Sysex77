@@ -4,7 +4,244 @@
 *(Данные записаны вручную из монитора Sysex77 после исправления очереди в `MidiDemo.h`.  
 Отдельного файла `analiz-midi.txt` не существует — журнал наблюдений ведётся в `MIDI_MAP_OBSERVATIONS.md`.)*
 
-**Краткое содержание:** блоки ниже показывают **формат лога**, **адрес главного параметра** и **сопутствующие адреса** которые SY99 шлёт при том же жесте — то что агент должен уметь различать.
+**Краткое содержание:** блоки ниже показывают **формат лога**, **адрес главного параметра** и **сопутствующие адреса** которые SY99 шлёт при том же жесте — то что агент должен уметь различать. Дополнительно зафиксирован **Voice Common — ELMODE** (ручной тест двусторонней связи) и **канонический эталон привязки SY99 — Output Group El.1 / MCTEN/OUTSEL**.
+
+---
+
+## Reference binding pattern — Output Group El.1 / MCTEN/OUTSEL (WORKING)
+
+**Дата журнала:** 2026-05-19  
+**Статус:** **confirmed working reference pattern** — использовать как шаблон для будущих привязок параметров SY99 (в т.ч. bit-packed и non-slider UI).
+
+| Поле | Значение |
+|------|----------|
+| **UI name** | Output Group El.1 |
+| **technical/manual name** | MCTEN/OUTSEL |
+| **address** | `03 00 00 08` |
+| **full SysEx** | `F0 43 1n 34 03 00 00 08 00 VV F7` |
+| **ValueTree property** | `ELEMENT1OUTSEL` |
+| **transport control** | `sliderMixerEl1Outsel` |
+| **mapping** | off=`0x00`, G1=`0x02`, G2=`0x04`, both=`0x06` |
+| **inbound** | `valueSysexIn` → `MidiSlider::valueChanged` → `ValueTree` → UI binding |
+| **outbound** | UI → `setValue` → `sliderValueChanged` → `/SYSEX` → `sendToOutputs` |
+| **status** | confirmed working reference pattern |
+
+**Код:** `Voice.h` (`setupMixerElOutsel`, `sliderMixerEl1Outsel`), `MixerSection.h` (`MixerOutputGroupBinding` — UI-кнопки Group 1/2; read-modify-write полного байта VV; без параллельного `valueSysexIn`-listener на binding).  
+**UI:** `VoiceCommonPage` → Mixer → El.1 → Output Group (две toggle-кнопки).  
+**Bit-packed:** биты MCTEN сохраняются через read-modify-write; transport owner остаётся привязан к тому же байту/адресу `03 00 00 08`.
+
+---
+
+## [CONFIRMED WORKING] Element Level (ELVL)
+
+**Дата журнала:** 2026-05-19  
+**Статус:** **CONFIRMED WORKING** — App→Synth, Synth→App.
+
+| Поле | Значение |
+|------|----------|
+| **address** | `03 EE 00 00` (E1 `EE=00`, E2 `20`, E3 `40`, E4 `60`) |
+| **full SysEx** | `F0 43 1n 34 03 EE 00 00 00 VV F7` |
+| **meaning** | Element Level |
+| **UI range** | 0 … 127 |
+| **ValueTree property** | `ELEMENTnVOLUME` |
+| **transport control** | `VoicePage::sliderMixerEl1Level` … `sliderMixerEl4Level` (dedicated `MidiSlider` per element; no reparent) |
+| **Mixer** | `VoiceCommonPage` → Mixer → Level row (`attachStripLevelControl`) |
+| **inbound / outbound** | existing `MidiSlider` path + `valueSysexIn` (one transport per element; not batch-duplicated) |
+
+---
+
+## [CONFIRMED WORKING] Element Detune (ELDT)
+
+**Дата журнала:** 2026-05-19  
+**Статус:** **CONFIRMED WORKING** — App→Synth, Synth→App, Mixer ↔ Pitch panel synchronized.
+
+| Поле | Значение |
+|------|----------|
+| **address** | `03 EE 00 01` (E1 `EE=00`, E2 `20`, E3 `40`, E4 `60`) |
+| **full SysEx** | `F0 43 1n 34 03 EE 00 01 00 VV F7` |
+| **meaning** | Element Detune |
+| **UI range** | −7 … +7 |
+| **ValueTree property** | `ELEMENTnFINE` |
+| **transport control** | `Pitch::sliderFine` (reparent to Mixer Detune row on Common tab) |
+| **inbound / outbound** | existing `MidiSlider` + `valueSysexIn` (no second subscriber) |
+| **Mixer** | `VoiceCommonPage` → `attachStripDetuneControl` / `restorePitchDetuneSliders` |
+
+---
+
+## [CONFIRMED WORKING] Element Note Shift (ELNS)
+
+**Дата журнала:** 2026-05-19  
+**Статус:** **CONFIRMED WORKING** — App→Synth, Synth→App, Mixer ↔ Pitch panel synchronized.
+
+| Поле | Значение |
+|------|----------|
+| **address** | `03 EE 00 02` (E1 `EE=00`, E2 `20`, E3 `40`, E4 `60`) |
+| **full SysEx** | `F0 43 1n 34 03 EE 00 02 00 VV F7` |
+| **meaning** | Element Note Shift |
+| **UI range** | −64 … +63 |
+| **SYSEX VV range** | 0 … 127 |
+| **conversion** | UI→VV: `VV = clamp(UI, −64..+63) + 64`; VV→UI: `UI = clamp(VV, 0..127) − 64` |
+| **ValueTree property** | `ELEMENTnPITCH` |
+| **transport control** | `Pitch::sliderPitch` + `setElementNoteShiftSignedSysexEncode(true)` |
+| **inbound / outbound** | existing `MidiSlider` + `valueSysexIn` (no second subscriber) |
+| **Mixer** | `VoiceCommonPage` → `attachStripNoteShiftControl` / `restorePitchDetuneSliders` (shared attach/restore with Detune) |
+
+---
+
+## [IMPLEMENTED] Element Note Limit Low (ENLL)
+
+**Дата журнала:** 2026-05-20  
+**Статус:** **IMPLEMENTED** — transport wired; live SY99 App↔Synth test pending.
+
+| Поле | Значение |
+|------|----------|
+| **address** | `03 EE 00 03` (E1 `EE=00`, E2 `20`, E3 `40`, E4 `60`) |
+| **full SysEx** | `F0 43 1n 34 03 EE 00 03 00 VV F7` |
+| **meaning** | Element Note Limit Low |
+| **UI range** | 0 … 127 (display: MIDI note names) |
+| **UI display** | `MidiMessage::getMidiNoteName(note, true, true, 3)` e.g. `C3`, `G#4` |
+| **ValueTree property** | `ELEMENTnNOTELIMITLOW` |
+| **transport control** | `VoicePage::sliderMixerEl1NoteLimitLow` … `sliderMixerEl4NoteLimitLow` |
+| **Mixer** | `VoiceCommonPage` → Note Limit Low row (`attachStripNoteLimitLowControl`) |
+| **inbound / outbound** | existing `MidiSlider` + `valueSysexIn` (same path as ELVL) |
+
+---
+
+## [IMPLEMENTED] Element Note Limit High (ENLH)
+
+**Дата журнала:** 2026-05-20  
+**Статус:** **IMPLEMENTED** — transport wired; live SY99 App↔Synth test pending.
+
+| Поле | Значение |
+|------|----------|
+| **address** | `03 EE 00 04` (E1 `EE=00`, E2 `20`, E3 `40`, E4 `60`) |
+| **full SysEx** | `F0 43 1n 34 03 EE 00 04 00 VV F7` |
+| **meaning** | Element Note Limit High |
+| **UI range** | 0 … 127 (display: MIDI note names) |
+| **UI display** | `MidiMessage::getMidiNoteName(note, true, true, 3)` e.g. `C3`, `G#4` |
+| **ValueTree property** | `ELEMENTnNOTELIMITHIGH` |
+| **transport control** | `VoicePage::sliderMixerEl1NoteLimitHigh` … `sliderMixerEl4NoteLimitHigh` |
+| **Mixer** | `VoiceCommonPage` → Note Limit High row (`attachStripNoteLimitHighControl`) |
+| **inbound / outbound** | existing `MidiSlider` + `valueSysexIn` (same path as ENLL) |
+| **UI default (temp)** | 127 at far right when `ELEMENTnNOTELIMITHIGH` not in ValueTree — until patch/pattern restore |
+
+---
+
+## [IMPLEMENTED] Element Velocity Limit Low (EVLL)
+
+**Дата журнала:** 2026-05-20  
+**Статус:** **IMPLEMENTED** — transport wired; live SY99 App↔Synth test pending.
+
+| Поле | Значение |
+|------|----------|
+| **address** | `03 EE 00 05` (E1 `EE=00`, E2 `20`, E3 `40`, E4 `60`) |
+| **full SysEx** | `F0 43 1n 34 03 EE 00 05 00 VV F7` |
+| **meaning** | Element Velocity Limit Low |
+| **UI range** | 0 … 127 |
+| **ValueTree property** | `ELEMENTnVELOCITYLIMITLOW` |
+| **transport control** | `VoicePage::sliderMixerEl1VelocityLimitLow` … `sliderMixerEl4VelocityLimitLow` |
+| **Mixer** | `VoiceCommonPage` → Velocity Limit Low row (`attachStripVelocityLimitLowControl`) |
+| **inbound / outbound** | existing `MidiSlider` + `valueSysexIn` (same path as ELVL) |
+
+---
+
+## [IMPLEMENTED] Element Velocity Limit High (EVLH)
+
+**Дата журнала:** 2026-05-20  
+**Статус:** **IMPLEMENTED** — transport wired; live SY99 App↔Synth test pending.
+
+| Поле | Значение |
+|------|----------|
+| **address** | `03 EE 00 06` (E1 `EE=00`, E2 `20`, E3 `40`, E4 `60`) |
+| **full SysEx** | `F0 43 1n 34 03 EE 00 06 00 VV F7` |
+| **meaning** | Element Velocity Limit High |
+| **UI range** | 0 … 127 |
+| **ValueTree property** | `ELEMENTnVELOCITYLIMITHIGH` |
+| **transport control** | `VoicePage::sliderMixerEl1VelocityLimitHigh` … `sliderMixerEl4VelocityLimitHigh` |
+| **Mixer** | `VoiceCommonPage` → Velocity Limit High row (`attachStripVelocityLimitHighControl`) |
+| **inbound / outbound** | existing `MidiSlider` + `valueSysexIn` (same path as EVLL) |
+
+---
+
+## [LESSON LEARNED] Common tab — batch `MidiSlider` subscribers (regression)
+
+**Дата журнала:** 2026-05-19  
+**Статус:** regression documented; mitigated by rollback + binding policy.
+
+**Симптом:** вкладка **Common** «пропадала» / UI зависал после попытки привязать сразу пачку новых `MidiSlider` на Mixer (Detune, Note Shift, Limits и т.д.) — по одному транспорту на параметр × 4 элемента.
+
+**Причина:** каждый `MidiSlider` в конструкторе подписывается на глобальный `valueSysexIn` и пишет в лог на **каждый** входящий SysEx; десятки новых подписчиков → шторм обновлений на UI-потоке. Дублирование адресов (напр. Detune уже на `Pitch::sliderFine`) усугубляло нагрузку.
+
+**Безопасный паттерн (обязателен для Mixer Group 0x03):**
+
+1. **Один параметр за раз** — не батчить несколько новых `MidiSlider` в одном PR/сессии.
+2. **Reuse existing transport** — reparent существующего `MidiSlider` + то же свойство ValueTree (`Pitch::sliderFine` / `sliderPitch`), **без** второго `valueSysexIn`-listener.
+3. Если отдельный transport неизбежен (как **Level**) — только выделенные слайдеры `sliderMixerEl*n*Level`, уже заведённые в `VoicePage`; не плодить дубликаты на тот же адрес.
+4. После reparent — сброс bounds + `resized()` полосы (`relayoutLiveStripRows`).
+
+**Откат:** batch-binding Detune/Note Shift/Limits отменён; Detune и Note Shift восстановлены через reparent (см. секции ELDT/ELNS выше).
+
+---
+
+## Voice Common: ELMODE — ручной тест и соответствие
+
+**Дата журнала:** 2026-05-17  
+**CSV / мануал:** `VC_M_00`, параметр **`ELMODE`**, `offset_hex` = **`02000000`** (`03_parameter_map.csv`).  
+**Код редактора:** `VoicePage::comboMode` → отправка параметр-изменений; приём по `valueSysexIn`: адрес **`02 00 00 00`**, сырое значение **`b8` = 0…10** → `comboMode.setSelectedId(b8 + 1)` (`Sysex77-master/Source/Voice.h`).  
+**Вердикт:** двусторонняя связь признана **стабильной**: перебор режимов от первого пункта комбо до **DRUM SET** даёт монотонную лестницу `vv`, UI и синх сходятся.
+
+### Наблюдаемые кадры (монитор Sysex77)
+
+Преамбула в логе: `Controller Data Button increment/decrement … Channel 1` — описание MidiDemo; полезное — кадры:
+
+```text
+[#1]  SysEx: F0 43 10 34 02 00 00 00 00 00 F7    ; ELMODE raw 0  → режим пункт 1
+[#2]  SysEx: F0 43 10 34 02 00 00 00 00 01 F7
+[#3]  SysEx: F0 43 10 34 02 00 00 00 00 02 F7
+[#4]  SysEx: F0 43 10 34 02 00 00 00 00 03 F7
+[#5]  SysEx: F0 43 10 34 02 00 00 00 00 04 F7
+[#6]  SysEx: F0 43 10 34 02 00 00 00 00 05 F7
+[#7]  SysEx: F0 43 10 34 02 00 00 00 00 06 F7
+[#8]  SysEx: F0 43 10 34 02 00 00 00 00 07 F7
+[#9]  SysEx: F0 43 10 34 02 00 00 00 00 08 F7
+[#10] SysEx: F0 43 10 34 02 00 00 00 00 09 F7
+[#11] SysEx: F0 43 10 34 02 00 00 00 00 0A F7    ; ELMODE raw 10 → DRUM SET (пункт 11)
+```
+
+*Примечание:* в текстовой консоли `02` иногда отображается как `2` — эквивалентно **`byte[3] = 0x02`**.
+
+### Соответствие байт ↔ параметр
+
+| Поле payload (9 байт после `43 10 34`) | Значение | Смысл |
+|---------------------------------------|----------|--------|
+| `43 10 34` | фикс. | универсальный шаблон parameter change (device `10`, модель-байт `34`) |
+| `02 00 00 00` | фикс. | адрес **`ELMODE`** (группа Voice Common Data, см. CSV `02000000`) |
+| `00` перед `vv` | `byte[7] = 0x00` | как в большинстве 9-байтных параметров этого проекта |
+| последний байт перед `F7` | **`00`…`0A`** | сырое **ELMODE** 0…10 (семантика мануала: 11 режимов включая Drum) |
+
+Мапинг **сирец SY99 ↔ пункт комбо (1-based):** `comboId = ELMODE_raw + 1`.
+
+### Фильтрация для агента при разборе логов ELMODE
+
+- Брать кадры с **`43 10 34 02 00 00 00 00 vv`** где **`vv`** ∈ **`00…0A`**.  
+- Не смешивать с Pan (`b3=0A` в этом проекте = Pan EG блок) или AWM (`b3=07`/`03` для других сцен).
+
+### ⚠ Путаница с именем голоса (VNAM)
+
+Те же строки монитора с адресом **`02 00 00 00 00 vv`** (**`b6 = 00`**) — это **не** символы имени голоса, а **ELMODE** (см. таблица выше).  
+Имя (**VNAM0…9**) задаётся **десятью** отдельными кадрами с **`b6 = 01..0A`** (параметры `02000001` … `0200000A`): последний байт — символ ASCII (7-бит после `0x20`).
+
+Ручное наблюдение (2026-05): **синт → комп** имени работает через эти сообщения при редактировании имени на SY99.
+
+**Комп → синт** имени исторически срывался по нескольким причинам:
+
+1. **`sysexEngine`** в `MidiDemo.h` мог оставаться **0** до захода в Config; тогда шли кадры `43 00 34 …` вместо рабочих `43 10 34 …` как у успешного ELMODE. **Исправление по умолчанию:** инициализация `sysexEngine` значением **`0x10`**.
+2. Отправка VNAM висела только на **Enter**; при уходе с поля имени после набора символы могли не уйти — добавлен **`textEditorFocusLost`** + флаг реального редактирования (`voiceNameDirtyForMidiOut`).
+3. **Нижний монитор MIDI** (`midiMonitor`) мог **забирать фокус клавиатуры** — ввод «не работал» в поле имени, а ответы синта попадали между отдельными `sendToOutputs` и путали обмен. **Исправления:** у монитора `setWantsKeyboardFocus(false)` и `setMouseClickGrabsKeyboardFocus(false)`; пачка из 10 VNAM уходит через **`MidiDemo::sendMidiMessagesToOutputsShunted`** с **одним** окном `boolStopReceive` на весь пакет. Ветка OSC `/77MidiMessage` принимает **int32 или float** для счётчика сообщений.
+
+**Статус (2026-05, решение пользователя):** поле имени (**`VoicePage::editName`**) в UI **оставляем**. **Комп → синт** имени как **рабочего сценария не фиксируем** и **далее по отладке не ведём** — по вашей оценке для реальной работы **не хватает набора символов / «алфавита»** (ограничения SY99 против свободного ввода в редакторе или наоборот). Исправления выше сохранены в коде на будущее; возврат к теме только по явному запросу.
+
+Код см. **`VoicePage::flushVoiceNameToSynth()`**, **`MidiDemo::sendMidiMessagesToOutputsShunted`**, **`MidiSysex.h`** (ветка `/77MidiMessage`).
 
 ---
 

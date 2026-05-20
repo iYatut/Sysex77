@@ -122,8 +122,11 @@ struct ConfigPage   : public Component, public ChangeListener, public Button::Li
         {
             Logger::writeToLog("file exist");
             tutorialData = XmlDocument::parse (tableFile);
-            // Parsing des couleurs
-            dataList   = tutorialData->getChildByName ("COLOR");
+
+            if (tutorialData != nullptr)
+                dataList = tutorialData->getChildByName ("COLOR");
+            else
+                Logger::writeToLog ("ConfigPage: SYSEX77.xml parse failed");
         }
         if(dataList) //Verifie que les data existent
         {
@@ -269,15 +272,23 @@ struct ConfigPage   : public Component, public ChangeListener, public Button::Li
     }
     void loadParams()
     {
-        
-     //   mySlider.setValue( props.getUserSettings()->getIntValue("mySlider"));
-        Logger::writeToLog("Load parametres:");
-        Logger::writeToLog(String(props.getUserSettings()->getIntValue("Model")));
-         Logger::writeToLog(String(props.getUserSettings()->getIntValue(IDs::COMMONFOOT)));
-        comboModel.setSelectedId(props.getUserSettings()->getIntValue("Model"));
-        SYModel = props.getUserSettings()->getIntValue("Model");
-        valueTreeVoice.setProperty(IDs::COMMONFOOT, props.getUserSettings()->getIntValue(IDs::COMMONFOOT), nullptr);
-        
+        Logger::writeToLog ("Load parametres:");
+
+        if (auto* settings = props.getUserSettings())
+        {
+            Logger::writeToLog (String (settings->getIntValue ("Model")));
+            Logger::writeToLog (String (settings->getIntValue (IDs::COMMONFOOT.toString())));
+
+            comboModel.setSelectedId (settings->getIntValue ("Model"), dontSendNotification);
+            SYModel = settings->getIntValue ("Model");
+            valueTreeVoice.setProperty (IDs::COMMONFOOT,
+                                        settings->getIntValue (IDs::COMMONFOOT.toString()),
+                                        nullptr);
+        }
+        else
+        {
+            Logger::writeToLog ("ConfigPage: user settings file unavailable");
+        }
     }
     void saveParams()
     {

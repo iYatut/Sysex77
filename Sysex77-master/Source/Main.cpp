@@ -145,17 +145,27 @@ public:
     const String getApplicationName() override       { return "MidiDemo"; }
     const String getApplicationVersion() override    { return "1.0.0"; }
 
-    void initialise (const String&) override         {
-        mainWindow.reset (new MainWindow ("MidiDemo", new MidiDemo(), *this));
+    void initialise (const String&) override
+    {
+        juce::File logFile = juce::File::getSpecialLocation (juce::File::currentExecutableFile)
+                                 .getSiblingFile ("Sysex77_OUT.log");
+        diagFileLogger.reset (new juce::FileLogger (logFile, "VNAM OUT diagnostic logging", 0));
+        juce::Logger::setCurrentLogger (diagFileLogger.get());
+        juce::Logger::writeToLog ("LOGFILE: " + logFile.getFullPathName());
 
+        mainWindow.reset (new MainWindow ("MidiDemo", new MidiDemo(), *this));
     }
     void myInitialisationWorkFinished()
     {
 
     }
-    void shutdown() override                         {
-        
-        mainWindow = nullptr; }
+    void shutdown() override
+    {
+        mainWindow = nullptr;
+
+        Logger::setCurrentLogger (nullptr);
+        diagFileLogger.reset();
+    }
 
 private:
     class MainWindow    : public DocumentWindow
@@ -197,6 +207,7 @@ private:
     };
 
     std::unique_ptr<MainWindow> mainWindow;
+    std::unique_ptr<juce::FileLogger> diagFileLogger;
 };
 
 //==============================================================================

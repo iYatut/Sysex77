@@ -103,7 +103,7 @@ F0 43 1n 34 GG T2 00 NN 0V VV F7
 | 05 | EVLL | 0-127 | Element Velocity Limit Low |
 | 06 | EVLH | 0-127 | Element Velocity Limit High |
 | 07 | PANNM | 0-31 | PAN data set table select |
-| 08 | MCTEN/OUTOSEL/OUT1SEL | bits | Micro Tuning + Output select |
+| 08 | MCTEN/OUTOSEL/OUT1SEL | bits | **Output Group** (UI) = MCTEN/OUTSEL (manual); legacy project name: Voice group. Bit-packed byte: MCTEN + OUTSEL. OUTSEL VV: off=`0x00`, G1=`0x02`, G2=`0x04`, both=`0x06`. E1..E4: `03 EE 00 08` with EE=`00`/`20`/`40`/`60`. |
 | 09 | - | - | (reserved) |
 | 0A | EFLN1EL | bits | Effect send lines 1-4 select |
 | 0B | EFSDLV | 0-127 | Effect send level |

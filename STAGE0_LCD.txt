@@ -1,0 +1,8 @@
+Этап 0 — статус
+
+01 ANONIM — готово (127, both/both, 1 AFM and 1 AWM)
+02 AP|CrsRock — готово (107, 1 AFM 1 AWM, el 127/127)
+03 EP:Classic — готово (110, 2 AFM POLY, el 127/127, det +2/-2, Out both, FX 1+3 @127)
+02 AP|CrsRock — det El1 -1 El2 +2; Out both; total 107
+
+Файл дампа: _agent_context\fixtures\03_ep_classic_07x1_voice.syx

@@ -17,6 +17,18 @@
 bool keyPressed (const KeyPress& key,
                  Component* originatingComponent) override
 {
+    if (key == KeyPress::upKey || key == KeyPress::leftKey)
+    {
+        stepLibraryVoiceSlot (-1);
+        return true;
+    }
+
+    if (key == KeyPress::downKey || key == KeyPress::rightKey)
+    {
+        stepLibraryVoiceSlot (1);
+        return true;
+    }
+
     if(key.getKeyCode() == 90)
     {
         if(key.getModifiers() == ModifierKeys::commandModifier)
@@ -28,7 +40,8 @@ bool keyPressed (const KeyPress& key,
      //   repaint();
     }
     
-    return 0;
+    juce::ignoreUnused (originatingComponent);
+    return false;
 }
 
 
@@ -66,6 +79,7 @@ void valueTreeParentChanged (ValueTree& treeWhoseParentHasChanged) override
 void timerCallback() override
 {
     undoManager.beginNewTransaction();
+    tickLiveVoiceReadIdle();
 }
 /*
 void initValuesToValueTree()

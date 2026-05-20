@@ -65,7 +65,7 @@ void oscMessageReceived (const OSCMessage& message) override
             //     Logger::writeToLog("Foot " + String( message[0].getInt32()));
             for(int i =0; i < message.size() ;i++)
                 sysexdata[i] = message[i].getInt32();
-            
+
             MidiMessage m = MidiMessage::createSysExMessage(sysexdata, 9);
       //      m.setTimeStamp (Time::getMillisecondCounterHiRes() * 0.001);
             sendToOutputs (m);
@@ -181,13 +181,26 @@ void oscMessageReceived (const OSCMessage& message) override
     }
     if (address.matches ( oscSendMidiMessage))
     {
-        // VNAM*: send the prepared array of per-character SysEx messages.
-        // OSC arg = count of messages stored in oscMidiMessage[].
-        if (message.size() == 1 && message[0].isInt32())
+        // VNAM*: send bundled SysEx stored in oscMidiMessage[].
+        int count = 0;
+        if (message.size() >= 1)
         {
-            const int count = message[0].getInt32();
-            for (int i = 0; i < count && i < oscMidiMessage.size(); ++i)
-                sendToOutputs (oscMidiMessage[i]);
+            if (message[0].isInt32())
+                count = message[0].getInt32();
+            else if (message[0].isFloat32())
+                count = juce::roundToInt (message[0].getFloat32());
+        }
+        if (count <= 0)
+            return;
+
+        Array<MidiMessage> bundle;
+        for (int i = 0; i < count && i < oscMidiMessage.size(); ++i)
+            bundle.add (oscMidiMessage.getUnchecked (i));
+
+        if (! bundle.isEmpty())
+        {
+            sendMidiMessagesToOutputsShunted (bundle);
+            Logger::writeToLog ("[VNAM] sent " + String (bundle.size()) + " SysEx (shunted MIDI in)");
         }
     }
     if (address.matches(adresseOscSendBank))
@@ -236,6 +249,19 @@ void oscMessageReceived (const OSCMessage& message) override
 
         const uint8* framePtr = (const uint8*) mb.getData();
         sendRaw (framePtr + offset, (size_t) length);
+
+        // 07:1 / 05:64 voice = 8101VC + following 0040VC in the file (not voice index + 1).
+        int tailOffset = -1;
+        int tailLength = 0;
+
+        if (YamahaLmVoiceDump::findPaired0040FrameAfter (framePtr, mb.getSize(),
+                                                         offset + length,
+                                                         tailOffset, tailLength))
+        {
+            sendRaw (framePtr + tailOffset, (size_t) tailLength);
+            Logger::writeToLog ("[LIBSYNC] /77SendVoice: sent 8101VC + 0040VC pair (slot "
+                                + String (idx) + ", tail @" + String (tailOffset) + ")");
+        }
     }
     //        rotaryKnob.setValue (jlimit (0.0f, 10.0f, message[0].getFloat32())); // [6]
 }

@@ -233,6 +233,15 @@ public:
     {
         return operatorMode;
     }
+
+    MidiSlider& getDetuneSlider() noexcept { return pitch.getDetuneSlider(); }
+
+    MidiSlider& getNoteShiftSlider() noexcept { return pitch.getNoteShiftSlider(); }
+
+    void restoreDetuneSliderToPitchPanel() { pitch.restoreDetuneSliderToPitchPanel(); }
+
+    void restoreNoteShiftSliderToPitchPanel() { pitch.restoreNoteShiftSliderToPitchPanel(); }
+
     void setWaveMode()
     {
                 btWave.setButtonText("Wave");

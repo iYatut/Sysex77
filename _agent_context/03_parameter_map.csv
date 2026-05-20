@@ -57,15 +57,15 @@ AFM_E1_R2,AFM Operator EG (Element 1),56000001,AFM_R2,0,63,MIDI_7bit,E1,AFM Oper
 AFM_E1_HT,AFM Operator EG (Element 1),5600000D,AFM_HT,0,63,MIDI_7bit,E1,AFM Operator EG Hold Time,manual
 AWM_E1_R2,AWM Element EG (Element 1),07000050,AWM_R2_E1,0,62,MIDI_7bit,E1,DEPRECATED — same offset as AWM_E1_PARI (Attack Rate per manual); display = raw - 1; CONFIRMED,manual
 AWM_E3_R2,AWM Element EG (Element 3),07400051,AWM_R2_E3,0,63,MIDI_7bit,E3,AWM Element EG R2 E3 (b4=40 b6=51; CONFIRMED),manual
-NE_E1_ELVL,Normal Voice Element (Element 1),03000000,ELVL,0,127,MIDI_7bit,E1,Element Level (E2..E4: b4=20/40/60),manual
-NE_E1_ELDT,Normal Voice Element (Element 1),03000001,ELDT,-7,7,signed,E1,Element Detune,manual
-NE_E1_ELNS,Normal Voice Element (Element 1),03000002,ELNS,-64,63,signed,E1,Element Note Shift,manual
-NE_E1_ENLL,Normal Voice Element (Element 1),03000003,ENLL,0,127,MIDI_7bit,E1,Element Note Limit Low,manual
-NE_E1_ENLH,Normal Voice Element (Element 1),03000004,ENLH,0,127,MIDI_7bit,E1,Element Note Limit High,manual
-NE_E1_EVLL,Normal Voice Element (Element 1),03000005,EVLL,0,127,MIDI_7bit,E1,Element Velocity Limit Low,manual
-NE_E1_EVLH,Normal Voice Element (Element 1),03000006,EVLH,0,127,MIDI_7bit,E1,Element Velocity Limit High,manual
+NE_E1_ELVL,Normal Voice Element (Element 1),03000000,ELVL,0,127,MIDI_7bit,E1,"Element Level; CONFIRMED WORKING; ValueTree=ELEMENTnVOLUME; transport=sliderMixerEl1..4Level; Mixer Level row; SysEx 03 EE 00 00",manual
+NE_E1_ELDT,Normal Voice Element (Element 1),03000001,ELDT,-7,7,signed,E1,"Element Detune; CONFIRMED WORKING; ValueTree=ELEMENTnFINE; transport=Pitch::sliderFine; Mixer reparent E1..E4; SysEx 03 EE 00 01",manual
+NE_E1_ELNS,Normal Voice Element (Element 1),03000002,ELNS,-64,63,signed,E1,"Element Note Shift; CONFIRMED WORKING; VV=UI+64; ValueTree=ELEMENTnPITCH; transport=Pitch::sliderPitch; Mixer reparent E1..E4; SysEx 03 EE 00 02",manual
+NE_E1_ENLL,Normal Voice Element (Element 1),03000003,ENLL,0,127,MIDI_7bit,E1,"Element Note Limit Low E1..E4; ValueTree=ELEMENTnNOTELIMITLOW; transport=sliderMixerEl1..4NoteLimitLow; SysEx 03 EE 00 03; UI note names via MidiMessage::getMidiNoteName(_,true,true,3); live test pending",manual
+NE_E1_ENLH,Normal Voice Element (Element 1),03000004,ENLH,0,127,MIDI_7bit,E1,"Element Note Limit High E1..E4; ValueTree=ELEMENTnNOTELIMITHIGH; transport=sliderMixerEl1..4NoteLimitHigh; SysEx 03 EE 00 04; UI note names via MidiMessage::getMidiNoteName(_,true,true,3); live test pending",manual
+NE_E1_EVLL,Normal Voice Element (Element 1),03000005,EVLL,0,127,MIDI_7bit,E1,"Element Velocity Limit Low E1..E4; ValueTree=ELEMENTnVELOCITYLIMITLOW; transport=sliderMixerEl1..4VelocityLimitLow; SysEx 03 EE 00 05; live test pending",manual
+NE_E1_EVLH,Normal Voice Element (Element 1),03000006,EVLH,0,127,MIDI_7bit,E1,"Element Velocity Limit High E1..E4; ValueTree=ELEMENTnVELOCITYLIMITHIGH; transport=sliderMixerEl1..4VelocityLimitHigh; SysEx 03 EE 00 06; live test pending",manual
 NE_E1_PANNM,Normal Voice Element (Element 1),03000007,PANNM,0,31,index,E1,PAN data set table select,manual
-NE_E1_MCTEN,Normal Voice Element (Element 1),03000008,MCTEN_OUTSEL,,,bits,E1,Micro Tuning enable + Output select (bit-packed; see manual),manual
+NE_E1_MCTEN,Normal Voice Element (Element 1),03000008,MCTEN_OUTSEL,,,bits,E1,"UI=Output Group El.1; technical=MCTEN/OUTSEL; WORKING reference pattern; ValueTree=ELEMENT1OUTSEL; transport=sliderMixerEl1Outsel; SysEx F0 43 1n 34 03 00 00 08 00 VV F7; OUTSEL VV off=0x00 G1=0x02 G2=0x04 both=0x06; inbound valueSysexIn->MidiSlider->ValueTree->UI; outbound UI->setValue->sliderValueChanged->/SYSEX->sendToOutputs (E2..E4: b4=20/40/60)",manual
 NE_E1_EFLN1EL,Normal Voice Element (Element 1),0300000A,EFLN1EL,,,bits,E1,Effect send lines 1-4 select (bit-packed),manual
 NE_E1_EFSDLV,Normal Voice Element (Element 1),0300000B,EFSDLV,0,127,MIDI_7bit,E1,Effect send level,manual
 NE_E1_EFSDVL,Normal Voice Element (Element 1),0300000C,EFSDVL,-7,7,signed,E1,Effect send velocity sense,manual

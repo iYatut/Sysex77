@@ -25,8 +25,10 @@ public:
         // In your constructor, you should add any child components, and
         // initialise any special settings that your component needs.
         addAndMakeVisible(sliderPitch);
-        sliderPitch.setRangeAndRound(0, 127, 60);
-        sliderPitch.setSliderStyle(Slider::SliderStyle::IncDecButtons);
+        sliderPitch.setSliderStyle (Slider::SliderStyle::IncDecButtons);
+        sliderPitch.setRange (-64, 63, 1);
+        sliderPitch.setNumDecimalPlacesToDisplay (0);
+        sliderPitch.setDoubleClickReturnValue (true, 0);
         sliderPitch.addListener(this);
         
         addAndMakeVisible(groupTitre);
@@ -99,9 +101,9 @@ public:
         sliderFine.setRangeAndRound(-7, 7,0);
         sliderFine.setPopupDisplayEnabled(true, true, this);
         sysexdata[6] = 0x02;
-        sliderPitch.setMidiSysex(sysexdata);
-        valuePitch.setValue(60);
-        sliderPitch.getValueObject().referTo(valuePitch);
+        sliderPitch.setMidiSysex (sysexdata);
+        sliderPitch.setElementNoteShiftSignedSysexEncode (true);
+        sliderPitch.getValueObject().referTo (valuePitch);
       
      
  
@@ -118,8 +120,7 @@ public:
     {
         if(slider == &sliderPitch)
         {
-            String str = "Pitch " + MidiMessage::getMidiNoteName(sliderPitch.getValue(), true, true, 3);
-            groupTitre.setText(str);
+            groupTitre.setText ("Note Shift " + String (sliderPitch.getValue()));
         }
  
         
@@ -142,18 +143,48 @@ public:
     
     void resized() override
     {
-        int hGrid = getHeight()/6;
+        layoutPitchPanelControls();
+    }
 
-        groupTitre.setBounds( 0,0,getWidth(),getHeight());
-   
-        sliderPitch.setBoundsRelative(0.04f, 0.1f, 0.9f, 0.2f);
- 
-        btFixed.setBounds(10,getHeight()- (hGrid + 10) ,getWidth()-20, hGrid);
-        sliderFine.setBounds(10, hGrid + hGrid + 8, getWidth() - 24, hGrid + hGrid);
+    /** Existing Detune transport: SysEx 03 EE 00 01, ValueTree ELEMENTnFINE. */
+    MidiSlider& getDetuneSlider() noexcept { return sliderFine; }
 
+    /** Existing Note Shift transport: SysEx 03 EE 00 02, ValueTree ELEMENTnPITCH. */
+    MidiSlider& getNoteShiftSlider() noexcept { return sliderPitch; }
+
+    void restoreDetuneSliderToPitchPanel()
+    {
+        addAndMakeVisible (sliderFine);
+        sliderFine.setRangeAndRound (-7, 7, 0);
+        sliderFine.setPopupDisplayEnabled (true, true, this);
+        layoutPitchPanelControls();
+    }
+
+    void restoreNoteShiftSliderToPitchPanel()
+    {
+        addAndMakeVisible (sliderPitch);
+        sliderPitch.setSliderStyle (Slider::IncDecButtons);
+        sliderPitch.setRange (-64, 63, 1);
+        sliderPitch.setNumDecimalPlacesToDisplay (0);
+        sliderPitch.setDoubleClickReturnValue (true, 0);
+        sliderPitch.setElementNoteShiftSignedSysexEncode (true);
+        sliderPitch.setPopupDisplayEnabled (true, true, this);
+        layoutPitchPanelControls();
     }
 
 private:
+    void layoutPitchPanelControls()
+    {
+        const int hGrid = getHeight() / 6;
+
+        groupTitre.setBounds (0, 0, getWidth(), getHeight());
+
+        sliderPitch.setBoundsRelative (0.04f, 0.1f, 0.9f, 0.2f);
+
+        btFixed.setBounds (10, getHeight() - (hGrid + 10), getWidth() - 20, hGrid);
+        sliderFine.setBounds (10, hGrid + hGrid + 8, getWidth() - 24, hGrid + hGrid);
+    }
+
     int intOperator = 1;
     int intFine;
     

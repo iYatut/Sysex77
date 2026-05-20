@@ -11,6 +11,8 @@
 #pragma once
 
 #include "../JuceLibraryCode/JuceHeader.h"
+#include "YamahaLmVoiceDump.h"
+#include "VoicesTableModel.h"
 
 //==============================================================================
 /*
@@ -40,10 +42,10 @@ public:
         editText.setSelectAllWhenFocused(true);
         
         groupDrop.setVisible(false);
+        sourceModel.owner = this;
         sourceModel.addChangeListener(this);
- 
-   //     addAndMakeVisible (target);
 
+        selectFirstBankAndReload();
     }
 
     ~BankTableModel()
@@ -84,47 +86,11 @@ public:
 
     void changeListenerCallback (ChangeBroadcaster* source) override
     {
-      if(loadBankRequest)
+      if (loadBankRequest)
       {
-          loadBankRequest = false; //make a better code later
-          loadBank();
-
-          int rowToSelect = -1;
-          for (int r = 0; r < arrayBank.size(); ++r)
-          {
-              if (arrayBank[r].equalsIgnoreCase ("UNNAMED.SYX")
-                  || arrayBank[r].equalsIgnoreCase ("UNNAMED.syx"))
-              {
-                  rowToSelect = r;
-                  break;
-              }
-          }
-          Time newestDumpTime;
-          if (rowToSelect < 0)
-          {
-              for (int r = 0; r < arrayBank.size() && r < BankFiles.size(); ++r)
-              {
-                  const String nm = arrayBank[r];
-                  if (nm.startsWithIgnoreCase ("DUMP-") && nm.endsWithIgnoreCase (".syx"))
-                  {
-                      const Time t = BankFiles[r].getLastModificationTime();
-                      if (rowToSelect < 0 || t > newestDumpTime)
-                      {
-                          newestDumpTime = t;
-                          rowToSelect = r;
-                      }
-                  }
-              }
-          }
-          if (rowToSelect < 0 && arrayBank.size() > 0)
-              rowToSelect = 0;
-          if (rowToSelect >= 0)
-          {
-              sourceListBox.selectRow (rowToSelect);
-              bankSelected = arrayBank[rowToSelect];
-              sendChangeMessage();
-              return;
-          }
+          loadBankRequest = false;
+          reloadAfterLibraryFileAdded();
+          return;
       }
         Logger::writeToLog("BankModel: changebrodcaster");
         if (requestSysex == true)
@@ -167,53 +133,166 @@ public:
         }
         else
         {
+        reloadVoicesFromSelectedBankFile();
+        }
+    }
+
+    /** Rescan library folder; preserve current bank selection (no auto-select of new captures). */
+    void reloadAfterLibraryFileAdded()
+    {
+        const String previousBank = bankSelected;
+        loadBank();
+
+        int rowToSelect = -1;
+
+        for (int r = 0; r < arrayBank.size(); ++r)
+        {
+            if (arrayBank[r].equalsIgnoreCase (previousBank))
+            {
+                rowToSelect = r;
+                break;
+            }
+        }
+
+        if (rowToSelect >= 0)
+        {
+            sourceListBox.selectRow (rowToSelect);
+            bankSelected = arrayBank[rowToSelect];
+        }
+        else
+        {
+            sourceListBox.updateContent();
+            repaint();
+        }
+    }
+
+    /** Parse F0…F7 frames from the selected bank .syx into arrayListVoices / offset tables. */
+    void reloadVoicesFromSelectedBankFile()
+    {
+        resetLibraryRecallContext();
+
         arrayListVoices.clear();
         voiceSysexFileOffsets.clear();
         voiceSysexFileLengths.clear();
-        MemoryBlock mb;
-        if(BankFiles[sourceListBox.getSelectedRow()].exists())
+
+        const int row = sourceListBox.getSelectedRow();
+
+        if (row < 0 || row >= BankFiles.size())
         {
-        BankFiles[sourceListBox.getSelectedRow()].loadFileAsData(mb);
+            Logger::writeToLog ("[BankLoad] no bank row selected");
+            sendChangeMessage();
+            return;
+        }
+
+        bankSelected = arrayBank[row];
+        const File& bankFile = BankFiles[row];
+
+        if (! bankFile.existsAsFile())
+        {
+            Logger::writeToLog ("[BankLoad] bank file missing: " + bankFile.getFullPathName());
+            sendChangeMessage();
+            return;
+        }
+
+        MemoryBlock mb;
+
+        if (! bankFile.loadFileAsData (mb))
+        {
+            Logger::writeToLog ("[BankLoad] failed to read: " + bankFile.getFullPathName());
+            sendChangeMessage();
+            return;
+        }
 
         const uint8* const data = (const uint8*) mb.getData();
         const size_t total = mb.getSize();
 
-        if(total > 0) // si pas de data evite le plantage !
+        if (total == 0)
         {
+            Logger::writeToLog ("[BankLoad] empty file: " + bankFile.getFileName());
+            sendChangeMessage();
+            return;
+        }
+
         size_t i = 0;
+
         while (i < total)
         {
-
-            if(data[i]== 0xF0) //entree
+            if (data[i] != 0xF0)
             {
-                const size_t frameStart = i;
-                size_t j = i + 1;
-                while (j < total && data[j] != 0xF7)
-                    ++j;
-                const size_t frameEnd = (j < total ? j : total - 1);
-
-                String str;
-                if (frameStart + 33 + 10 <= total)
-                {
-                    for(int a = 0; a < 10; ++a)
-                    {
-                        const uint8 c = data[frameStart + 33 + a];
-                        const char ch = (c >= 0x20 && c < 0x7F) ? (char) c : ' ';
-                        str += String::charToString ((juce_wchar) ch);
-                    }
-                }
-                arrayListVoices.add (str);
-                voiceSysexFileOffsets.add ((int) frameStart);
-                voiceSysexFileLengths.add ((int) (frameEnd - frameStart + 1));
-
-                i = frameEnd;
+                ++i;
+                continue;
             }
-            ++i;
+
+            const size_t frameStart = i;
+            size_t j = i + 1;
+
+            while (j < total && data[j] != 0xF7)
+                ++j;
+
+            if (j >= total)
+                break;
+
+            const int frameLen = (int) (j - frameStart + 1);
+
+            if (! YamahaLmVoiceDump::frameContainsLmTag (data + frameStart, frameLen, "8101VC"))
+            {
+                i = j + 1;
+                continue;
+            }
+
+            String str;
+
+            YamahaLmVoiceDump::Lm8101VcMinimal parsed;
+
+            if (YamahaLmVoiceDump::parseLm8101VcMinimal (data + frameStart, frameLen, parsed)
+                && parsed.name[0] != '\0')
+            {
+                str = String (parsed.name).trimEnd();
+            }
+            else if (frameStart + 43 <= total)
+            {
+                for (int a = 0; a < 10; ++a)
+                {
+                    const uint8 c = data[frameStart + 33 + a];
+                    const char ch = (c >= 0x20 && c < 0x7F) ? (char) c : ' ';
+                    str += String::charToString ((juce_wchar) ch);
+                }
+
+                str = str.trimEnd();
+            }
+
+            arrayListVoices.add (str);
+            voiceSysexFileOffsets.add ((int) frameStart);
+            voiceSysexFileLengths.add (frameLen);
+
+            i = j + 1;
         }
+
+        Logger::writeToLog ("[BankLoad] " + bankFile.getFileName() + ": "
+                            + String (arrayListVoices.size()) + " voice(s) (8101VC), "
+                            + String ((int64) total) + " bytes");
+
+        if (! arrayListVoices.isEmpty())
+        {
+            int idx = bankSelectedVoiceIndex;
+
+            if (idx < 0 || idx >= arrayListVoices.size())
+                idx = 0;
+
+            selectLibraryVoiceSlot (idx % 16, (idx / 16) * 16);
         }
-        }
+
         sendChangeMessage();
-        }
+    }
+
+    void selectFirstBankAndReload()
+    {
+        if (arrayBank.isEmpty())
+            return;
+
+        sourceListBox.selectRow (0);
+        rowSelectedBank = 0;
+        reloadVoicesFromSelectedBankFile();
     }
 
     void paint (Graphics& g) override
@@ -244,6 +323,8 @@ public:
  //==============================================================================
 struct SourceItemListboxContents  : public ListBoxModel, public ChangeBroadcaster
     {
+        BankTableModel* owner = nullptr;
+
         // The following methods implement the necessary virtual functions from ListBoxModel,
         // telling the listbox how many rows there are, painting them, etc.
   
@@ -264,6 +345,17 @@ struct SourceItemListboxContents  : public ListBoxModel, public ChangeBroadcaste
             sendChangeMessage();
         }
 
+        void listBoxItemClicked (int row, const MouseEvent&) override
+        {
+            rowSelectedBank = row;
+
+            if (row >= 0 && row < arrayBank.size())
+                bankSelected = arrayBank[row];
+
+            if (owner != nullptr)
+                owner->reloadVoicesFromSelectedBankFile();
+        }
+
         void listBoxItemDoubleClicked	(int 	row,const MouseEvent &)	override
         {
             doubleClickBank = true;
@@ -277,16 +369,7 @@ struct SourceItemListboxContents  : public ListBoxModel, public ChangeBroadcaste
            
             if (rowIsSelected)
             {
-                 rowSelectedBank = rowNumber;
-                if(!doubleClickBank)
-                {
                 g.fillAll (SYColSelected);
-                bankSelected = arrayBank[rowNumber];
-                Logger::writeToLog("change");
-                sendChangeMessage();
-                
-                }
-                
             }
                 else if (rowNumber % 2)
                 {
@@ -297,7 +380,7 @@ struct SourceItemListboxContents  : public ListBoxModel, public ChangeBroadcaste
                 g.setFont (height * 0.7f);
                   
               //    auto text = arrayBank[rowNumber] ;
-                    if(arrayBank[rowNumber].isNotEmpty())
+                    if (rowNumber < arrayBank.size() && arrayBank[rowNumber].isNotEmpty())
                     g.drawFittedText(arrayBank[rowNumber], 0, 0, width, height, Justification::centred, 1);
 /*
                     g.drawText ("Aucunes Banques" + String (rowNumber + 1),
@@ -438,7 +521,7 @@ struct SourceItemListboxContents  : public ListBoxModel, public ChangeBroadcaste
         //  appDirPath.findChildFiles(BankFiles, TypeOfFileToFind::findFiles, true, "someName");
         
         appDirPath.findChildFiles(BankFiles, File::TypesOfFileToFind::findFiles
-                                  , true,"*.syx");
+                                  , false, "*.syx");
         numRows=BankFiles.size();
         
         //Verifier si il s'agit bien d'une BANK YAMAHA SY

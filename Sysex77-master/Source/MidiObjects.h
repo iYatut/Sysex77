@@ -127,6 +127,30 @@ public:
                        // if(sysexData[7] ==  val)
                         
                 Logger::writeToLog ("Slider rexeive val " + String(val));
+                        if (encodeMixerEffectSendSigned7)
+                        {
+                            Slider::setValue (uiFromMixerEffectSendSigned7Sysex (val));
+                        }
+                        else if (encodeElementNoteShiftSigned)
+                        {
+                            Slider::setValue (uiFromElementNoteShiftSysex (val));
+                        }
+                        else if (encodeYamahaSymmetric12ATPBR && boolNegative)
+                        {
+                            int setVal;
+                            if (val == 0)
+                                setVal = 0;
+                            else if (val >= 1 && val <= 0x0C)
+                                setVal = val;
+                            else if (val >= 0x11 && val <= 0x1C)
+                                setVal = 0x10 - val;
+                            else
+                                setVal = val;
+
+                            Slider::setValue(setVal);
+                        }
+                        else
+                        {
                         if(boolNegative)
                         {
                             if(val > (intNegativeDelta -2))
@@ -139,6 +163,7 @@ public:
                 Logger::writeToLog ("signed minus  " + String(val));
                         }
                                 Slider::setValue(val);
+                        }
                                 
                             }
                         }
@@ -153,6 +178,44 @@ public:
     void setBoolInvert(bool boolSigned)
     {
         boolInvert = boolSigned;
+    }
+
+    /** When set (ATPBR −12…+12 only): outbound/inbound SysEx data byte follows Yamaha Voice Common
+        ladder 0x1C…0x11, 0x00, 0x01…0x0C instead of MidiSlider bitwise legacy (~v + max+2). */
+    void setVoiceCommonSymmetric12SysexEncode (bool on) noexcept
+    {
+        encodeYamahaSymmetric12ATPBR = on;
+    }
+
+    /** Mixer Effect Send Vel Sens / Scaling (03 NN 0B/0C): UI −7…+7 ↔ SY99 VV ladder. */
+    void setMixerEffectSendSigned7SysexEncode (bool on) noexcept
+    {
+        encodeMixerEffectSendSigned7 = on;
+    }
+
+    /** Element Note Shift (03 EE 00 02): UI −64…+63 ↔ VV 0…127 via VV = UI + 64. */
+    void setElementNoteShiftSignedSysexEncode (bool on) noexcept
+    {
+        encodeElementNoteShiftSigned = on;
+    }
+
+    /** MIDI note number 0…127: text box / popup show note names (e.g. C3), not raw integers. */
+    void setMidiNoteNumberTextDisplay()
+    {
+        setNumDecimalPlacesToDisplay (0);
+        textFromValueFunction = [] (double value)
+        {
+            const int note = (int) jlimit (0.0, 127.0, value);
+            return MidiMessage::getMidiNoteName (note, true, true, 3);
+        };
+        valueFromTextFunction = [] (const String& text)
+        {
+            const String t = text.trim();
+            for (int n = 0; n <= 127; ++n)
+                if (MidiMessage::getMidiNoteName (n, true, true, 3).equalsIgnoreCase (t))
+                    return (double) n;
+            return 0.0;
+        };
     }
     
     void setRangeAndRound (int min, int max, int defValue)
@@ -184,19 +247,33 @@ public:
     void sliderValueChanged (Slider* slider) override
     {
      
-        int value = slider->getValue();
+        int value = (int) slider->getValue();
         Logger::writeToLog ("Slider Value changed " + String(value));
-        if(value<0)
+
+        if (encodeMixerEffectSendSigned7)
         {
-            if(!boolInvert)
-            value = ~value;
+            value = sysexFromMixerEffectSendSigned7Ui (value);
+        }
+        else if (encodeElementNoteShiftSigned)
+        {
+            value = sysexFromElementNoteShiftUi (value);
+        }
+        else if (encodeYamahaSymmetric12ATPBR)
+        {
+            if (value < 0)
+                value = 0x1C + ((-12) - value);  // −12→0x1C … −1→0x11 ; 0 unchanged
+        }
+        else if (value < 0)
+        {
+            if (! boolInvert)
+                value = ~value;
 
             value += intNegativeDelta;
-        Logger::writeToLog ("Signed minus " + String(value));
+            Logger::writeToLog ("Signed minus " + String(value));
         }
         
        // uint8 data = slider->getValue();
-        sysexData[8] = value;
+        sysexData[8] = (uint8) value;
         
         sender.send(oscAddressPatern, (uint8) sysexData[0], sysexData[1], sysexData[2], sysexData[3], sysexData[4], sysexData[5], sysexData[6], sysexData[7], sysexData[8]);
         
@@ -213,10 +290,77 @@ public:
         strOscAdress = oscAdress;
     }
 
+    void sendSysexPacket (const uint8 data[9])
+    {
+        sender.send (oscAddressPatern, (uint8) data[0], data[1], data[2], data[3],
+                     data[4], data[5], data[6], data[7], data[8]);
+    }
+
 private:
     bool boolNegative = false;   // set if neg value like pan
     bool boolInvert = false;
+    /** Voice Common ATPBR symmetric −12…+12 (addr 02 00 00 29) Yamaha byte ladder. Off for all other sliders (Pan/Pitch/filter etc.). */
+    bool encodeYamahaSymmetric12ATPBR { false };
+    bool encodeMixerEffectSendSigned7 { false };
+    bool encodeElementNoteShiftSigned { false };
     int intNegativeDelta; // correction for sysex
+
+    static int uiFromElementNoteShiftSysex (int sysexVal) noexcept
+    {
+        return jlimit (-64, 63, jlimit (0, 127, sysexVal) - 64);
+    }
+
+    static int sysexFromElementNoteShiftUi (int uiVal) noexcept
+    {
+        return jlimit (0, 127, jlimit (-64, 63, uiVal) + 64);
+    }
+
+    static int uiFromMixerEffectSendSigned7Sysex (int sysexVal) noexcept
+    {
+        switch ((uint8) jlimit (0, 127, sysexVal))
+        {
+            case 0x00: return 0;
+            case 0x01: return 1;
+            case 0x02: return 2;
+            case 0x03: return 3;
+            case 0x04: return 4;
+            case 0x05: return 5;
+            case 0x06: return 6;
+            case 0x07: return 7;
+            case 0x09: return -1;
+            case 0x0A: return -2;
+            case 0x0B: return -3;
+            case 0x0C: return -4;
+            case 0x0D: return -5;
+            case 0x0E: return -6;
+            case 0x0F: return -7;
+            case 0x08: return 0;  // gap in SY99 ladder; treat as centre
+            default:   return 0;  // unknown VV: never expose raw byte as UI
+        }
+    }
+
+    static int sysexFromMixerEffectSendSigned7Ui (int uiVal) noexcept
+    {
+        switch (jlimit (-7, 7, uiVal))
+        {
+            case -7: return 0x0F;
+            case -6: return 0x0E;
+            case -5: return 0x0D;
+            case -4: return 0x0C;
+            case -3: return 0x0B;
+            case -2: return 0x0A;
+            case -1: return 0x09;
+            case  0: return 0x00;
+            case  1: return 0x01;
+            case  2: return 0x02;
+            case  3: return 0x03;
+            case  4: return 0x04;
+            case  5: return 0x05;
+            case  6: return 0x06;
+            case  7: return 0x07;
+            default: return 0x00;
+        }
+    }
     String oscAddressPatern {"/SYSEX"};
     String strOscAdress;
 //    MidiMessage midiMessage;
