@@ -104,6 +104,71 @@ namespace YamahaLmVoiceDump
         return juce::jlimit (0, 4, sysexVal);
     }
 
+    inline int sysexFromVoiceCommonAtpbrUi (int uiVal) noexcept
+    {
+        uiVal = juce::jlimit (-12, 12, uiVal);
+
+        if (uiVal == 0)
+            return 0;
+
+        if (uiVal > 0)
+            return uiVal;
+
+        return 0x1C + (-12 - uiVal);
+    }
+
+    inline int uiFromElementDetuneSysex (int sysexVal) noexcept
+    {
+        int raw = sysexVal & 0x7f;
+        constexpr int delta = 9;
+
+        if (raw > delta - 2)
+        {
+            raw -= delta;
+            raw = ~raw;
+        }
+
+        return juce::jlimit (-7, 7, raw);
+    }
+
+    inline int sysexFromElementDetuneUi (int uiVal) noexcept
+    {
+        uiVal = juce::jlimit (-7, 7, uiVal);
+
+        if (uiVal >= 0)
+            return uiVal;
+
+        return (~uiVal) + 9;
+    }
+
+    inline int sysexFromElementNoteShiftUi (int uiVal) noexcept
+    {
+        return juce::jlimit (0, 127, juce::jlimit (-64, 63, uiVal) + 64);
+    }
+
+    inline int sysexFromMixerEffectSendSigned7Ui (int uiVal) noexcept
+    {
+        switch (juce::jlimit (-7, 7, uiVal))
+        {
+            case -7: return 0x0F;
+            case -6: return 0x0E;
+            case -5: return 0x0D;
+            case -4: return 0x0C;
+            case -3: return 0x0B;
+            case -2: return 0x0A;
+            case -1: return 0x09;
+            case  0: return 0x00;
+            case  1: return 0x01;
+            case  2: return 0x02;
+            case  3: return 0x03;
+            case  4: return 0x04;
+            case  5: return 0x05;
+            case  6: return 0x06;
+            case  7: return 0x07;
+            default: return 0x00;
+        }
+    }
+
     inline int efln1ElOffsetFromElvlWol (int elvlOff, int wolOff) noexcept
     {
         if (wolOff == 93)

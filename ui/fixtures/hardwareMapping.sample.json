@@ -1,0 +1,11 @@
+{
+  "deviceId": "launchcontrol-xl",
+  "templateId": "launchcontrol-mixer",
+  "inputPortMatch": "Launch Control XL",
+  "feedbackPortMatch": "Launch Control XL",
+  "activePage": 0,
+  "bindings": [
+    { "cc": 21, "channel": 1, "page": 0, "slotIndex": 0 },
+    { "cc": 22, "channel": 1, "page": 0, "slotIndex": 1 }
+  ]
+}

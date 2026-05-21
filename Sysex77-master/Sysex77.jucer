@@ -80,6 +80,22 @@
             file="Source/Sy99ParamRegistry.h"/>
       <FILE id="Sy99RegC" name="Sy99ParamRegistry.cpp" compile="1" resource="0"
             file="Source/Sy99ParamRegistry.cpp"/>
+      <FILE id="Sy99ApiH" name="Sy99ParamApiServer.h" compile="0" resource="0"
+            file="Source/Sy99ParamApiServer.h"/>
+      <FILE id="Sy99ApiC" name="Sy99ParamApiServer.cpp" compile="1" resource="0"
+            file="Source/Sy99ParamApiServer.cpp"/>
+      <FILE id="Sy99TplH" name="Sy99ControllerTemplateStore.h" compile="0" resource="0"
+            file="Source/Sy99ControllerTemplateStore.h"/>
+      <FILE id="Sy99TplC" name="Sy99ControllerTemplateStore.cpp" compile="1" resource="0"
+            file="Source/Sy99ControllerTemplateStore.cpp"/>
+      <FILE id="Sy99HwMapH" name="Sy99HardwareMappingStore.h" compile="0" resource="0"
+            file="Source/Sy99HardwareMappingStore.h"/>
+      <FILE id="Sy99HwMapC" name="Sy99HardwareMappingStore.cpp" compile="1" resource="0"
+            file="Source/Sy99HardwareMappingStore.cpp"/>
+      <FILE id="Sy99HwRtH" name="Sy99HardwareMappingRuntime.h" compile="0" resource="0"
+            file="Source/Sy99HardwareMappingRuntime.h"/>
+      <FILE id="Sy99HwRtC" name="Sy99HardwareMappingRuntime.cpp" compile="1" resource="0"
+            file="Source/Sy99HardwareMappingRuntime.cpp"/>
       <FILE id="KSWPHc" name="Values.h" compile="0" resource="0" file="Source/Values.h"/>
       <FILE id="MVtIs5" name="ValueTrees.h" compile="0" resource="0" file="Source/ValueTrees.h"/>
       <FILE id="nY6taA" name="Main.cpp" compile="1" resource="0" file="Source/Main.cpp"/>

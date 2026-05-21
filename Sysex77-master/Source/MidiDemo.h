@@ -48,6 +48,7 @@
  *******************************************************************************/
 #include "Values.h"
 #include "LiveSynthState.h"
+#include "Sy99HardwareMappingRuntime.h"
 
 // Set to 1 for temporary logs: queue sizes per async drain + max consecutive identical SysEx in batch.
 #ifndef SYSEX77_MIDI_MONITOR_DIAGNOSTICS
@@ -468,6 +469,13 @@ public:
                 voicePage->commitEditorSessionToLiveSynthBaseline();
             };
         }
+
+        Sy99HardwareMappingRuntime::setHandlers (
+            [this] (const uint8_t frame[9]) { sendParamSysexFrame (frame); },
+            [this] (int channel, int cc, int value, const juce::String& portMatch)
+            {
+                sendFeedbackCc (channel, cc, value, portMatch);
+            });
     }
     
     ~MidiDemo()
@@ -791,7 +799,7 @@ private:
     };
     
     //==============================================================================
-    void handleIncomingMidiMessage (MidiInput* /*source*/, const MidiMessage& message) override
+    void handleIncomingMidiMessage (MidiInput* source, const MidiMessage& message) override
     {
         // This is called on the MIDI thread
         const ScopedLock sl (midiMonitorLock);
@@ -818,6 +826,13 @@ private:
                 else if (cc == 32)
                     inboundLibraryBankLsb() = message.getControllerValue();
             }
+
+            const juce::String portName = source != nullptr ? source->getName() : juce::String();
+            const int ccValue = message.getControllerValue();
+            juce::MessageManager::callAsync ([portName, ch, cc, ccValue]()
+            {
+                Sy99HardwareMappingRuntime::handleIncomingCc (portName, ch, cc, ccValue, sysexEngine);
+            });
         }
 
         if (gRequestLiveVoiceRead && message.isSysEx())
@@ -829,7 +844,10 @@ private:
             const uint8* d = message.getSysExData();
 
             if (n == 9 && d[0] == 0x43 && d[2] == 0x34)
+            {
                 gLiveSynthState.ingestParameterFrame (d[3], d[4], d[5], d[6], d[7], d[8]);
+                Sy99HardwareMappingRuntime::onLiveParameterSysex (d[3], d[4], d[5], d[6], d[8]);
+            }
             else
                 gLiveSynthState.noteNonParameterMessage (n);
         }
@@ -945,8 +963,12 @@ private:
                     // ECHO GUARD: ignore own reflections for 50ms after send
                     const uint8 incomingAddr[4] = { data[3], data[4], data[5], data[6] };
                     if (! isRecentEcho (incomingAddr))
+                    {
                         valueSysexIn = make_var_array(data[3], data[4], data[5],
                                                       data[6], data[7], data[8]);
+                        Sy99HardwareMappingRuntime::onLiveParameterSysex (data[3], data[4], data[5],
+                                                                          data[6], data[8]);
+                    }
                 }
             }
 
@@ -1147,6 +1169,58 @@ public:
         m.setTimeStamp (Time::getMillisecondCounterHiRes() * 0.001);
         sendToOutputs (m);
         hasPending = false;
+    }
+
+    void sendParamSysexFrame (const uint8_t sysexdata[9])
+    {
+        uint8_t frame[9];
+        memcpy (frame, sysexdata, 9);
+
+        const juce::uint32 now = juce::Time::getMillisecondCounter();
+
+        if (now - lastSysexSendTime < 33)
+        {
+            for (int i = 0; i < 9; ++i)
+                pendingSysex[i] = frame[i];
+
+            hasPending = true;
+            throttleTimer.startTimer (35);
+            return;
+        }
+
+        lastSysexSendTime = now;
+        hasPending = false;
+        throttleTimer.stopTimer();
+
+        echoGuard[echoGuardIndex].addr[0] = frame[3];
+        echoGuard[echoGuardIndex].addr[1] = frame[4];
+        echoGuard[echoGuardIndex].addr[2] = frame[5];
+        echoGuard[echoGuardIndex].addr[3] = frame[6];
+        echoGuard[echoGuardIndex].sentAt  = now;
+        echoGuardIndex = (echoGuardIndex + 1) % kEchoGuardSize;
+
+        MidiMessage m = MidiMessage::createSysExMessage (frame, 9);
+        m.setTimeStamp (Time::getMillisecondCounterHiRes() * 0.001);
+        sendToOutputs (m);
+    }
+
+    void sendFeedbackCc (int channel, int cc, int value, const juce::String& portMatch)
+    {
+        boolStopReceive = true;
+
+        for (auto& midiOutput : midiOutputs)
+        {
+            if (midiOutput->outDevice.get() == nullptr)
+                continue;
+
+            if (portMatch.isNotEmpty()
+                && ! midiOutput->outDevice->getName().containsIgnoreCase (portMatch))
+                continue;
+
+            midiOutput->outDevice->sendMessageNow (MidiMessage::controllerEvent (channel, cc, value));
+        }
+
+        boolStopReceive = false;
     }
     
     //==============================================================================

@@ -1,0 +1,13 @@
+{
+  "id": "push2-default",
+  "name": "Push 2 default",
+  "pages": [
+    {
+      "name": "Mixer",
+      "slots": [
+        { "label": "WOL", "paramId": "WOL", "elementIndex": 0 },
+        { "label": "E1 Level", "paramId": "ELVL", "elementIndex": 0 }
+      ]
+    }
+  ]
+}

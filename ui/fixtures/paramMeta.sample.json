@@ -1,0 +1,54 @@
+[
+  {
+    "id": "ELMODE",
+    "tag": "ELMODE",
+    "uiLabel": "Voice Mode",
+    "group": "02",
+    "perElement": false,
+    "rawMin": 0,
+    "rawMax": 3,
+    "decode": "identityRaw",
+    "encode": "identityRaw",
+    "enumNames": ["AFM", "AWM", "AFM+AWM", "AFM+AFM"],
+    "addr": {
+      "b3": 0,
+      "b4": 2,
+      "b5": 0,
+      "b6": 0,
+      "perElement": false
+    },
+    "confidence": {
+      "confirmedLive": true,
+      "confirmedBulk8101": true,
+      "confirmedBulk0040": false,
+      "candidateBulk0040": false,
+      "packedConflict": false
+    }
+  },
+  {
+    "id": "ELVL",
+    "tag": "ELVL",
+    "uiLabel": "Element Level",
+    "group": "03",
+    "perElement": true,
+    "rawMin": 0,
+    "rawMax": 127,
+    "decode": "identityRaw",
+    "encode": "identityRaw",
+    "enumNames": [],
+    "addr": {
+      "b3": 0,
+      "b4": 3,
+      "b5": 0,
+      "b6": 0,
+      "perElement": true
+    },
+    "confidence": {
+      "confirmedLive": true,
+      "confirmedBulk8101": true,
+      "confirmedBulk0040": true,
+      "candidateBulk0040": false,
+      "packedConflict": false
+    }
+  }
+]

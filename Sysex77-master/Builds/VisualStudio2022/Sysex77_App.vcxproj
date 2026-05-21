@@ -146,6 +146,10 @@
   <ItemGroup>
     <ClCompile Include="..\..\Source\Main.cpp"/>
     <ClCompile Include="..\..\Source\Sy99ParamRegistry.cpp"/>
+    <ClCompile Include="..\..\Source\Sy99ParamApiServer.cpp"/>
+    <ClCompile Include="..\..\Source\Sy99ControllerTemplateStore.cpp"/>
+    <ClCompile Include="..\..\Source\Sy99HardwareMappingStore.cpp"/>
+    <ClCompile Include="..\..\Source\Sy99HardwareMappingRuntime.cpp"/>
     <ClCompile Include="..\..\..\..\..\Program Files\Juce\JUCE\modules\juce_audio_basics\audio_play_head\juce_AudioPlayHead.cpp">
       <ExcludedFromBuild>true</ExcludedFromBuild>
     </ClCompile>

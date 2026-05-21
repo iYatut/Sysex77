@@ -16,6 +16,7 @@
 #include "LiveSynthState.h"
 
 #include <cstdint>
+#include <vector>
 
 namespace YamahaLmVoiceDump
 {
@@ -84,9 +85,15 @@ namespace Sy99ParamRegistry
     {
         Id              id;
         const char*     tag;
+        bool            perElement;
+        const char*     uiLabel;
+        const char*     group;
         Address         addr;
         int             rawMin;
         int             rawMax;
+        int             (*decodeRawToUi) (int raw);
+        int             (*encodeUiToRaw) (int ui);
+        const char*     enumNames[16];
         ConfidenceFlags confidence;
     };
 
@@ -125,5 +132,64 @@ namespace Sy99ParamRegistry
 
     extern const Id kCommonDirectSliderIds[kCommonDirectSliderIdCount];
     extern const Id kCommonDirectComboIds[kCommonDirectComboIdCount];
+
+    juce::String metaIdToString (Id id);
+    juce::String codecFnToString (int (*fn) (int));
+    juce::var metaToVar (const Meta& m);
+
+    /** Parse enum id string, e.g. "ELMODE". Returns Id::Count if unknown. */
+    Id idFromString (const juce::String& idStr);
+
+    /** Default + optional appDirPath/params_meta.json overrides. Safe to call once at startup. */
+    void initializeMetaRegistryAtStartup();
+
+    juce::File paramsMetaJsonFile();
+
+    std::vector<Meta> loadMetaFromJsonFile (const juce::File& f);
+    void saveMetaToJsonFile (const juce::File& f, const std::vector<Meta>& metas);
+
+    std::vector<Meta> defaultMetaTable();
+
+    /** Merge editable fields from patch (uiLabel, group, enumNames, rawMin, rawMax, decode, encode). */
+    bool applyMetaPatch (Id id, const juce::var& patchObject);
+
+    /** Write active registry to params_meta.json. */
+    void persistActiveMetaRegistry();
+
+    /** Build 9-byte `43 nn 34 …` live parameter frame from registry Meta. */
+    bool buildLiveParameterSysexFrame (Id id, int elementIndex, int rawValue,
+                                       uint8 outFrame[9], uint8 sysexDeviceByte) noexcept;
+
+    juce::var allParamsToJsonVar();
+    juce::var currentLiveDumpToJsonVar();
+
+    enum class PresentationKind
+    {
+        numeric,
+        namedEnum,
+        decoded
+    };
+
+    juce::String presentationKindToString (PresentationKind kind) noexcept;
+
+    /** F0 + 9 data bytes + F7, uppercase hex pairs separated by spaces. */
+    juce::String formatLiveSysexFrameHex (const uint8 frame[9]) noexcept;
+
+    int decodeRawToUiValue (const Meta& meta, int raw) noexcept;
+
+    struct ProgramUiLabel
+    {
+        juce::String label;
+        PresentationKind kind = PresentationKind::numeric;
+    };
+
+    /** Mirrors Voice.h combo/slider/enum presentation for a raw value. */
+    ProgramUiLabel programUiLabelForRaw (Id id, int raw) noexcept;
+
+    juce::String registryEnumLabelForRaw (const Meta& meta, int raw) noexcept;
+
+    /** Full ordered value map for API (rawMin..rawMax). */
+    juce::var paramValueMapToJsonVar (Id id, int elementIndex,
+                                      uint8 sysexDeviceByte = 0x10) noexcept;
 
 } // namespace Sy99ParamRegistry

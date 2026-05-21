@@ -21,5 +21,9 @@ Thumbs.db
 desktop.ini
 .DS_Store
 
+# Frontend
+ui/node_modules/
+ui/dist/
+
 # Large binary (scanned PDF, no text layer — link in SY99E2_reference.txt)
 _agent_context/SY99E2.pdf

@@ -8,6 +8,10 @@
 
 #include "../JuceLibraryCode/JuceHeader.h"
 #include "MidiDemo.h"
+#include "Sy99ParamApiServer.h"
+#include "Sy99ControllerTemplateStore.h"
+#include "Sy99HardwareMappingStore.h"
+#include "Sy99HardwareMappingRuntime.h"
 inline File getExamplesDirectory() noexcept
 {
 #ifdef PIP_JUCE_EXAMPLES_DIRECTORY
@@ -153,6 +157,12 @@ public:
         juce::Logger::setCurrentLogger (diagFileLogger.get());
         juce::Logger::writeToLog ("LOGFILE: " + logFile.getFullPathName());
 
+        Sy99ParamRegistry::initializeMetaRegistryAtStartup();
+        Sy99ControllerTemplates::initializeAtStartup();
+        Sy99HardwareMappings::initializeAtStartup();
+        Sy99HardwareMappingRuntime::initializeAtStartup();
+        getSy99ParamApiServer().start();
+
         mainWindow.reset (new MainWindow ("MidiDemo", new MidiDemo(), *this));
     }
     void myInitialisationWorkFinished()
@@ -161,6 +171,7 @@ public:
     }
     void shutdown() override
     {
+        getSy99ParamApiServer().stop();
         mainWindow = nullptr;
 
         Logger::setCurrentLogger (nullptr);
