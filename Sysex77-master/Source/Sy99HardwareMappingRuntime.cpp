@@ -235,6 +235,18 @@ namespace Sy99HardwareMappingRuntime
                                                 binding.elementIndex, raw);
     }
 
+    bool sendParameterSysexFrame (const uint8 frame[9]) noexcept
+    {
+        const juce::ScopedLock lock (gLock);
+        SendSysExFn send = gSendSysEx;
+
+        if (send == nullptr || frame == nullptr)
+            return false;
+
+        send (frame);
+        return true;
+    }
+
     void onLiveParameterSysex (uint8 b3, uint8 b4, uint8 b5, uint8 b6, uint8 b8)
     {
         if (juce::Time::getMillisecondCounter() < gSuppressFeedbackUntilMs.load())

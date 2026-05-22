@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
 import type { ParamMeta } from '../types/paramMeta';
+import { formatElementLabel } from '../utils/elementLabel';
 
 type ParamPickerProps = {
   params: ParamMeta[];
@@ -83,7 +84,7 @@ export function ParamPicker({ params, paramId, elementIndex, onChange }: ParamPi
       </label>
 
       <label className="form-field">
-        <span>elementIndex</span>
+        <span>Элемент (1…4)</span>
         <select
           value={elementIndex}
           disabled={selected !== null && !selected.perElement}
@@ -91,7 +92,7 @@ export function ParamPicker({ params, paramId, elementIndex, onChange }: ParamPi
         >
           {[0, 1, 2, 3].map((index) => (
             <option key={index} value={index}>
-              {index}
+              {formatElementLabel(index)}
             </option>
           ))}
         </select>

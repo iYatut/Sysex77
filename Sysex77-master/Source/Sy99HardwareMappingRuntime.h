@@ -31,4 +31,7 @@ namespace Sy99HardwareMappingRuntime
 
     /** Inbound SY99 parameter frame or resolved live value → CC/LED feedback. */
     void onLiveParameterSysex (uint8 b3, uint8 b4, uint8 b5, uint8 b6, uint8 b8);
+
+    /** Send 9-byte parameter frame (e.g. focus editor page on SY99). Returns false if no MIDI handler. */
+    bool sendParameterSysexFrame (const uint8 frame[9]) noexcept;
 }

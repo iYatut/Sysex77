@@ -32,6 +32,48 @@
 
 ---
 
+## [CONFIRMED WORKING] Effect Mode (EFMODE) и Effect Send El.1
+
+**Дата журнала:** 2026-05-21  
+**Статус:** **CONFIRMED WORKING** (JUCE Mixer + live SysEx); bulk EFMODE — **не подтверждён**.
+
+### EFMODE — глобальный режим эффектов
+
+| Поле | Значение |
+|------|----------|
+| **address** | `08 00 00 20` |
+| **full SysEx** | `F0 43 1n 34 08 00 00 20 00 VV F7` |
+| **UI range** | 0 Off / 1 Serial / 2 Parallel |
+| **ValueTree property** | `EFMODE` |
+| **transport control** | `VoicePage::sliderEfmode` (hidden receive-only) |
+| **visibility rule** | Off → скрыть Send 1 и Send 3; Serial → только Send 1; Parallel → Send 1 + Send 3 |
+
+### EFLN1EL — выбор линий Send (El.1 only)
+
+| Поле | Значение |
+|------|----------|
+| **address** | `03 00 00 09` (E1 `b4=00`; El.2–4 не реализованы на SY99) |
+| **full SysEx** | `F0 43 1n 34 03 00 00 09 00 VV F7` |
+| **bitmask** | Send 1=`0x01`, Send 3=`0x04`, оба=`0x05` |
+| **ValueTree property** | `ELEMENT1EFSENDSEL` |
+| **UI binding** | `MixerEffectSendSelectBinding` (Send 1 / Send 3 toggles) |
+
+### Level / Vel / Scaling (El.1)
+
+| Параметр | address | UI range | ValueTree |
+|----------|---------|----------|-----------|
+| EFSDLV (Level) | `03 00 00 0A` | 0…127 | `ELEMENT1EFSENDLVL` |
+| EFSDVSNS (Vel) | `03 00 00 0B` | −7…+7 | `ELEMENT1EFSENDVSNS` |
+| EFSDSCL (Scaling) | `03 00 00 0C` | −7…+7 | `ELEMENT1EFSENDSCL` |
+
+**Signed7 ladder:** raw `0x00`→0, `0x01`→+1, `0x02`→+2 … `0x07`→+7; `0x79`→−7 … `0x7F`→−1.
+
+**Bulk 8101VC:** EFLN1EL @ ELVL E1 + Δ подтверждён (fixture 03 → `0x05`). Offsets Level/Vel/Scaling @ efln+1…+3 — **кандидаты** (fixture 03 bulk lvl=0 vs LCD 127).
+
+**Код:** `Voice.h`, `MixerSection.h`, `Sy99ParamRegistry` (`EFMODE`, `EFLN1EL`, `EFSDLV`, `EFSDVSNS`, `EFSDSCL`).
+
+---
+
 ## [CONFIRMED WORKING] Element Level (ELVL)
 
 **Дата журнала:** 2026-05-19  

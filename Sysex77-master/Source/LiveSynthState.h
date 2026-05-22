@@ -14,6 +14,16 @@
 
 extern juce::File appDirPath; // defined in MidiDemo.h
 
+struct LiveSynthState;
+
+#if JUCE_DEBUG
+namespace Sy99ParamRegistry
+{
+void debugAuditLiveStateReset (LiveSynthState& s) noexcept;
+void debugAuditLiveStateClearParam9 (LiveSynthState& s) noexcept;
+}
+#endif
+
 inline juce::File libraryCapturesDirPath() noexcept
 {
     return appDirPath.getChildFile ("captures");
@@ -78,6 +88,7 @@ struct LiveSynthState
         nonParameterMessageCount = 0;
         largestPayloadBytes = 0;
         elmodeRaw = -1;
+        efmodeRaw = -1;
         commonVolumeRaw = -1;
         memset (voiceName, 0, sizeof (voiceName));
         voiceNameCharCount = 0;
@@ -92,6 +103,7 @@ struct LiveSynthState
         memset (elementEfsendselRaw, -1, sizeof (elementEfsendselRaw));
         memset (elementEfsendlvlRaw, -1, sizeof (elementEfsendlvlRaw));
         memset (elementEfsdvsnsRaw, -1, sizeof (elementEfsdvsnsRaw));
+        memset (elementEfsdsclRaw, -1, sizeof (elementEfsdsclRaw));
         memset (groupFrameCount, 0, sizeof (groupFrameCount));
 
         hasParsedBulk8101 = false;
@@ -109,6 +121,8 @@ struct LiveSynthState
         lmEfln1ElRaw = -1;
         lmEfsdlvRaw = -1;
         lmEfsdvlRaw = -1;
+        lmEfsdsclRaw = -1;
+        lm0040EfmodeRaw = -1;
         memset (lmVoiceName, 0, sizeof (lmVoiceName));
 
         liveWpbrRaw = -1;
@@ -161,6 +175,68 @@ struct LiveSynthState
     bool hasAnySyncSource() const noexcept
     {
         return hasParsedBulk8101 || hasParsedBulk0040 || parameterFrameCount > 0;
+    }
+
+    /** Clear live param9 slots so bulk8101/0040 win in resolveParam; keeps bulk flags and lm* fields. */
+    void clearLiveParam9Overrides() noexcept
+    {
+#if JUCE_DEBUG
+        Sy99ParamRegistry::debugAuditLiveStateClearParam9 (*this);
+#endif
+        parameterFrameCount = 0;
+        elmodeRaw = -1;
+        efmodeRaw = -1;
+        commonVolumeRaw = -1;
+        memset (voiceName, 0, sizeof (voiceName));
+        voiceNameCharCount = 0;
+        memset (elementLevelRaw, -1, sizeof (elementLevelRaw));
+#if JUCE_DEBUG
+        for (int i = 0; i < 4; ++i)
+        {
+            if (elementOutselRaw[(size_t) i] >= 0)
+            {
+                Logger::writeToLog ("[OUTSEL audit overwrite] writer=clearLiveParam9Overrides"
+                                    + String (" idx=") + String (i)
+                                    + " old=" + String (elementOutselRaw[(size_t) i])
+                                    + " new=- source=8101");
+            }
+        }
+#endif
+        memset (elementOutselRaw, -1, sizeof (elementOutselRaw));
+        memset (elementEldtRaw, -1, sizeof (elementEldtRaw));
+        memset (elementElnsRaw, -1, sizeof (elementElnsRaw));
+        memset (elementEnllRaw, -1, sizeof (elementEnllRaw));
+        memset (elementEnlhRaw, -1, sizeof (elementEnlhRaw));
+        memset (elementEvllRaw, -1, sizeof (elementEvllRaw));
+        memset (elementEvlhRaw, -1, sizeof (elementEvlhRaw));
+        memset (elementEfsendselRaw, -1, sizeof (elementEfsendselRaw));
+        memset (elementEfsendlvlRaw, -1, sizeof (elementEfsendlvlRaw));
+        memset (elementEfsdvsnsRaw, -1, sizeof (elementEfsdvsnsRaw));
+        memset (elementEfsdsclRaw, -1, sizeof (elementEfsdsclRaw));
+        memset (groupFrameCount, 0, sizeof (groupFrameCount));
+
+        liveWpbrRaw = -1;
+        liveAtpbrRaw = -1;
+        livePmasnRaw = -1;
+        livePmrngRaw = -1;
+        liveAmasnRaw = -1;
+        liveAmrngRaw = -1;
+        liveFmasnRaw = -1;
+        liveFmrngRaw = -1;
+        livePnlasnRaw = -1;
+        livePnlrngRaw = -1;
+        liveCoasnRaw = -1;
+        liveCorngRaw = -1;
+        livePnbasnRaw = -1;
+        livePnbrngRaw = -1;
+        liveEgbasnRaw = -1;
+        liveEgbrngRaw = -1;
+        liveWlasnRaw = -1;
+        liveWllmlRaw = -1;
+        liveMctunRaw = -1;
+        liveRndpRaw = -1;
+        liveAftmdRaw = -1;
+        liveSptpntRaw = -1;
     }
 
     /** Fill bulk-derived fields from LM 8101VC (07:1 Voice); does not touch parameter-change counters. */
@@ -322,6 +398,8 @@ struct LiveSynthState
     int elementEfsendselRaw[4] {};
     int elementEfsendlvlRaw[4] {};
     int elementEfsdvsnsRaw[4] {};
+    int elementEfsdsclRaw[4] {};
+    int efmodeRaw = -1;
     int groupFrameCount[16] {};
 
     bool hasParsedBulk8101 = false;
@@ -339,6 +417,8 @@ struct LiveSynthState
     int lmEfln1ElRaw = -1;
     int lmEfsdlvRaw = -1;
     int lmEfsdvlRaw = -1;
+    int lmEfsdsclRaw = -1;
+    int lm0040EfmodeRaw = -1;
     char lmVoiceName[11] {};
 
     int liveWpbrRaw = -1;
@@ -386,7 +466,188 @@ struct LiveSynthState
     int lm0040RndpRaw = -1;
     int lm0040AftmdRaw = -1;
     int lm0040SptpntRaw = -1;
+
+#if JUCE_DEBUG
+    /** Monotonic write-audit sequence (Debug only); incremented in debugLogWriteAuditImpl. */
+    inline static int64 writeAuditSeq = 0;
+
+    static int64 nextWriteAuditSeq() noexcept
+    {
+        return ++writeAuditSeq;
+    }
+
+    static juce::String formatRawSlot (int raw) noexcept
+    {
+        return raw >= 0 ? juce::String (raw) : juce::String ("-");
+    }
+
+    static juce::String formatRawArray4 (const int* values) noexcept
+    {
+        if (values == nullptr)
+            return "-,-,-,-";
+
+        return formatRawSlot (values[0]) + "," + formatRawSlot (values[1]) + ","
+             + formatRawSlot (values[2]) + "," + formatRawSlot (values[3]);
+    }
+
+    /** Debug-only: compact raw-field snapshot after sync ingest (bulk vs live dominance). */
+    inline void debugLogSnapshotAfterSync (const juce::String& tag) const noexcept
+    {
+        juce::String gg;
+
+        for (int g = 0; g < 16; ++g)
+        {
+            if (groupFrameCount[(size_t) g] <= 0)
+                continue;
+
+            if (gg.isNotEmpty())
+                gg << " ";
+
+            gg << "GG" << juce::String::toHexString (g).toUpperCase()
+               << "=" << groupFrameCount[(size_t) g];
+        }
+
+        if (gg.isEmpty())
+            gg = "-";
+
+        Logger::writeToLog ("[LiveState snapshot] tag=" + tag
+                            + " has8101=" + juce::String ((int) hasParsedBulk8101)
+                            + " has0040=" + juce::String ((int) hasParsedBulk0040)
+                            + " paramFrames=" + juce::String (parameterFrameCount)
+                            + " nonParamSysex=" + juce::String (nonParameterMessageCount)
+                            + " groupFrames=" + gg);
+
+        Logger::writeToLog ("[LiveState snapshot] tag=" + tag
+                            + " elmodeRaw=" + formatRawSlot (elmodeRaw)
+                            + " lmElmodeRaw=" + formatRawSlot (lmElmodeRaw)
+                            + " efmodeRaw=" + formatRawSlot (efmodeRaw)
+                            + " lm0040EfmodeRaw=" + formatRawSlot (lm0040EfmodeRaw));
+
+        Logger::writeToLog ("[LiveState snapshot] tag=" + tag
+                            + " commonVolumeRaw=" + formatRawSlot (commonVolumeRaw)
+                            + " lmWolRaw=" + formatRawSlot (lmWolRaw)
+                            + " voiceNameChars=" + juce::String (voiceNameCharCount)
+                            + " lmVoiceName=\"" + juce::String (lmVoiceName).trimEnd() + "\"");
+
+        Logger::writeToLog ("[LiveState snapshot] tag=" + tag
+                            + " elementLevelRaw[0..3]=" + formatRawArray4 (elementLevelRaw)
+                            + " lmElvlE1Raw=" + formatRawSlot (lmElvlE1Raw)
+                            + " lmElvlRaw[0..3]=" + formatRawArray4 (lmElvlRaw));
+
+        Logger::writeToLog ("[LiveState snapshot] tag=" + tag
+                            + " elementOutselRaw[0..3]=" + formatRawArray4 (elementOutselRaw)
+                            + " lmOutselE1Raw=" + formatRawSlot (lmOutselE1Raw)
+                            + " lmOutselRaw[0..3]=" + formatRawArray4 (lmOutselRaw));
+
+        Logger::writeToLog ("[LiveState snapshot] tag=" + tag
+                            + " elementEldtRaw[0..3]=" + formatRawArray4 (elementEldtRaw)
+                            + " lmEldtRaw[0..3]=" + formatRawArray4 (lmEldtRaw));
+
+        Logger::writeToLog ("[LiveState snapshot] tag=" + tag
+                            + " elementElnsRaw[0..3]=" + formatRawArray4 (elementElnsRaw)
+                            + " lmElnsRaw[0..3]=" + formatRawArray4 (lmElnsRaw));
+
+        Logger::writeToLog ("[LiveState snapshot] tag=" + tag
+                            + " elementEnllRaw[0..3]=" + formatRawArray4 (elementEnllRaw)
+                            + " elementEnlhRaw[0..3]=" + formatRawArray4 (elementEnlhRaw)
+                            + " elementEvllRaw[0..3]=" + formatRawArray4 (elementEvllRaw)
+                            + " elementEvlhRaw[0..3]=" + formatRawArray4 (elementEvlhRaw)
+                            + " lmEvllRaw[0..3]=" + formatRawArray4 (lmEvllRaw)
+                            + " lmEvlhRaw[0..3]=" + formatRawArray4 (lmEvlhRaw));
+
+        Logger::writeToLog ("[LiveState snapshot] tag=" + tag
+                            + " elementEfsendselRaw[0..3]=" + formatRawArray4 (elementEfsendselRaw)
+                            + " elementEfsendlvlRaw[0..3]=" + formatRawArray4 (elementEfsendlvlRaw)
+                            + " elementEfsdvsnsRaw[0..3]=" + formatRawArray4 (elementEfsdvsnsRaw)
+                            + " elementEfsdsclRaw[0..3]=" + formatRawArray4 (elementEfsdsclRaw)
+                            + " lmEfln1ElRaw=" + formatRawSlot (lmEfln1ElRaw)
+                            + " lmEfsdlvRaw=" + formatRawSlot (lmEfsdlvRaw)
+                            + " lmEfsdvlRaw=" + formatRawSlot (lmEfsdvlRaw)
+                            + " lmEfsdsclRaw=" + formatRawSlot (lmEfsdsclRaw));
+
+        Logger::writeToLog ("[LiveState snapshot] tag=" + tag
+                            + " liveWpbrRaw=" + formatRawSlot (liveWpbrRaw)
+                            + " lm0040WpbrRaw=" + formatRawSlot (lm0040WpbrRaw)
+                            + " liveAtpbrRaw=" + formatRawSlot (liveAtpbrRaw)
+                            + " lm0040AtpbrRaw=" + formatRawSlot (lm0040AtpbrRaw)
+                            + " liveWllmlRaw=" + formatRawSlot (liveWllmlRaw)
+                            + " lm0040WllmlRaw=" + formatRawSlot (lm0040WllmlRaw)
+                            + " liveSptpntRaw=" + formatRawSlot (liveSptpntRaw)
+                            + " lm0040SptpntRaw=" + formatRawSlot (lm0040SptpntRaw));
+
+        Logger::writeToLog ("[LiveState snapshot] tag=" + tag
+                            + " livePmasnRaw=" + formatRawSlot (livePmasnRaw)
+                            + " lm0040PmasnRaw=" + formatRawSlot (lm0040PmasnRaw)
+                            + " livePmrngRaw=" + formatRawSlot (livePmrngRaw)
+                            + " lm0040PmrngRaw=" + formatRawSlot (lm0040PmrngRaw)
+                            + " liveAmasnRaw=" + formatRawSlot (liveAmasnRaw)
+                            + " lm0040AmasnRaw=" + formatRawSlot (lm0040AmasnRaw)
+                            + " liveAmrngRaw=" + formatRawSlot (liveAmrngRaw)
+                            + " lm0040AmrngRaw=" + formatRawSlot (lm0040AmrngRaw));
+
+        Logger::writeToLog ("[LiveState snapshot] tag=" + tag
+                            + " liveFmasnRaw=" + formatRawSlot (liveFmasnRaw)
+                            + " lm0040FmasnRaw=" + formatRawSlot (lm0040FmasnRaw)
+                            + " liveFmrngRaw=" + formatRawSlot (liveFmrngRaw)
+                            + " lm0040FmrngRaw=" + formatRawSlot (lm0040FmrngRaw)
+                            + " livePnlasnRaw=" + formatRawSlot (livePnlasnRaw)
+                            + " lm0040PnlasnRaw=" + formatRawSlot (lm0040PnlasnRaw)
+                            + " livePnlrngRaw=" + formatRawSlot (livePnlrngRaw)
+                            + " lm0040PnlrngRaw=" + formatRawSlot (lm0040PnlrngRaw));
+
+        Logger::writeToLog ("[LiveState snapshot] tag=" + tag
+                            + " liveCoasnRaw=" + formatRawSlot (liveCoasnRaw)
+                            + " lm0040CoasnRaw=" + formatRawSlot (lm0040CoasnRaw)
+                            + " liveCorngRaw=" + formatRawSlot (liveCorngRaw)
+                            + " lm0040CorngRaw=" + formatRawSlot (lm0040CorngRaw)
+                            + " livePnbasnRaw=" + formatRawSlot (livePnbasnRaw)
+                            + " lm0040PnbasnRaw=" + formatRawSlot (lm0040PnbasnRaw)
+                            + " livePnbrngRaw=" + formatRawSlot (livePnbrngRaw)
+                            + " lm0040PnbrngRaw=" + formatRawSlot (lm0040PnbrngRaw));
+
+        Logger::writeToLog ("[LiveState snapshot] tag=" + tag
+                            + " liveEgbasnRaw=" + formatRawSlot (liveEgbasnRaw)
+                            + " lm0040EgbasnRaw=" + formatRawSlot (lm0040EgbasnRaw)
+                            + " liveEgbrngRaw=" + formatRawSlot (liveEgbrngRaw)
+                            + " lm0040EgbrngRaw=" + formatRawSlot (lm0040EgbrngRaw)
+                            + " liveWlasnRaw=" + formatRawSlot (liveWlasnRaw)
+                            + " lm0040WlasnRaw=" + formatRawSlot (lm0040WlasnRaw)
+                            + " liveMctunRaw=" + formatRawSlot (liveMctunRaw)
+                            + " lm0040MctunRaw=" + formatRawSlot (lm0040MctunRaw)
+                            + " liveRndpRaw=" + formatRawSlot (liveRndpRaw)
+                            + " lm0040RndpRaw=" + formatRawSlot (lm0040RndpRaw)
+                            + " liveAftmdRaw=" + formatRawSlot (liveAftmdRaw)
+                            + " lm0040AftmdRaw=" + formatRawSlot (lm0040AftmdRaw));
+    }
+#endif
 };
+
+#if JUCE_DEBUG
+namespace Sy99ParamRegistry
+{
+void debugLogOutselAuditAll (const LiveSynthState& s, const char* stage,
+                             const int uiByIdx[4], const int baselineByIdx[4]) noexcept;
+void debugLogOutselOverwrite (const char* writer, int idx, int oldVal, int newVal,
+                              const char* source) noexcept;
+void debugLogTrackedOverwriteSnapshot (const LiveSynthState& s, const char* tag) noexcept;
+void debugWriteAuditInt (int* slot, const char* field, int idx, int value,
+                         const char* writer, const char* stage) noexcept;
+void debugWriteAuditCharWithStage (char* slot, int idx, char value, const char* writer,
+                                   const char* stage) noexcept;
+}
+
+inline void debugWriteAuditLiveInt (int* slot, const char* field, int idx, int value,
+                                    const char* writer, const char* stage) noexcept
+{
+    Sy99ParamRegistry::debugWriteAuditInt (slot, field, idx, value, writer, stage);
+}
+
+inline void debugWriteAuditLiveChar (char* slot, int idx, char value,
+                                     const char* writer, const char* stage) noexcept
+{
+    Sy99ParamRegistry::debugWriteAuditCharWithStage (slot, idx, value, writer, stage);
+}
+#endif
 
 // --- Manual live-voice read session (globals; same pattern as requestSysex) ---
 
@@ -565,9 +826,8 @@ inline bool ingestLm8101FromBankVoiceSlotAndLog (int voiceIndex,
     return true;
 }
 
-/** Yamaha SY99 bulk / single-voice dump REQUEST — NOT in sy99_sysex_complete.md
-    (that file covers only F0 43 1n 34 parameter change). CHANGELOG cites F0 43 2n 34 ..
-    from SY99E2.PDF — still unverified on hardware. */
+/** Yamaha SY99 bulk / single-voice dump REQUEST — see _agent_context/sy99_bulk_dump_request.md
+    (F0 43 2n 7A …, not F0 43 2n 34). Tail bytes (mt/mm/checksum) still need hardware log. */
 inline void sendCurrentVoiceDumpRequestPendingVerification()
 {
     Logger::writeToLog ("[LiveRead] TODO: dump-request SysEx (F0 43 2n …) not in "
@@ -612,6 +872,10 @@ inline void saveLiveReadCaptureToSyx()
 
 inline void beginLiveVoiceReadFromSy99()
 {
+#if JUCE_DEBUG
+    Sy99ParamRegistry::debugLogTrackedOverwriteSnapshot (gLiveSynthState, "BeforeDump");
+    Sy99ParamRegistry::debugAuditLiveStateReset (gLiveSynthState);
+#endif
     gLiveSynthState.reset();
     gArrayLiveReadSysex.clear();
     gRequestLiveVoiceRead = true;
@@ -673,8 +937,11 @@ inline void finishLiveVoiceReadFromSy99()
         const uint8* raw = m.getRawData();
         const int rawN = m.getRawDataSize();
 
-        if (raw != nullptr && rawN > 0 && raw[0] == 0xf0)
+        if (raw != nullptr && rawN > 0)
         {
+            if (liveReadPayloadContainsLm8101Tag (raw, rawN))
+                lm8101TagInPayload = true;
+
             const auto block = YamahaLmVoiceDump::findLmBlock (raw, (size_t) rawN, "8101VC");
 
             if (block.data != nullptr)
@@ -685,13 +952,46 @@ inline void finishLiveVoiceReadFromSy99()
     const bool lm8101Ingested = gLiveSynthState.ingestLm8101FromSysexMessages (gArrayLiveReadSysex);
     const bool lm0040Ingested = gLiveSynthState.ingestLm0040FromSysexMessages (gArrayLiveReadSysex);
 
+    if (lm8101TagInPayload && ! lm8101Ingested)
+        Logger::writeToLog ("[SyncFromSY99] LM8101 tag in payload but no full frame found "
+                            "— check MIDI driver / SysEx chunking");
+
+    const bool bulkOnlySync = lm8101Ingested && lm0040Ingested;
+    int param9Replayed = 0;
+
+    if (bulkOnlySync)
+    {
+        gLiveSynthState.clearLiveParam9Overrides();
+    }
+    else
+    {
+        // Parameter-change frames (F0 43 … 34 …) captured during DUMP OUT override bulk slots
+        // when both are present — e.g. ELMODE live 7 vs bulk@32=8 on EP|GrnDual.
+        for (const auto& m : gArrayLiveReadSysex)
+        {
+            if (! m.isSysEx())
+                continue;
+
+            const int n = m.getSysExDataSize();
+            const uint8* d = m.getSysExData();
+
+            if (n == 9 && d != nullptr && d[0] == 0x43 && d[2] == 0x34)
+            {
+                gLiveSynthState.ingestParameterFrame (d[3], d[4], d[5], d[6], d[7], d[8]);
+                ++param9Replayed;
+            }
+        }
+    }
+
     Logger::writeToLog ("[SyncFromSY99] capture diag: msgs=" + String (totalMsgs)
                         + " param9=" + String (param9Msgs)
                         + " nearBulk8101=" + String (nearBulk8101Msgs)
                         + " lmTagInPayload=" + String ((int) lm8101TagInPayload)
                         + " lm8101Wrapped=" + String ((int) lm8101WrappedFrame)
                         + " lm8101Ingested=" + String ((int) lm8101Ingested)
-                        + " lm0040Ingested=" + String ((int) lm0040Ingested));
+                        + " lm0040Ingested=" + String ((int) lm0040Ingested)
+                        + " param9Replayed=" + String (param9Replayed)
+                        + " bulkOnly=" + String ((int) bulkOnlySync));
 
     if (lm8101Ingested || lm0040Ingested || gLiveSynthState.parameterFrameCount > 0)
     {
@@ -709,6 +1009,7 @@ inline void finishLiveVoiceReadFromSy99()
             p0040.wpbrRaw = gLiveSynthState.lm0040WpbrRaw;
             p0040.wllmlRaw = gLiveSynthState.lm0040WllmlRaw;
             p0040.sptpntRaw = gLiveSynthState.lm0040SptpntRaw;
+            p0040.efmodeRaw = gLiveSynthState.lm0040EfmodeRaw;
             Logger::writeToLog ("[SyncFromSY99] ingest0040: "
                                 + YamahaLmVoiceDump::formatLm0040VcMinimalLogLine (p0040));
         }
@@ -721,6 +1022,11 @@ inline void finishLiveVoiceReadFromSy99()
     Logger::writeToLog ("[SyncFromSY99] finishLiveVoiceRead done: "
                         + gLiveSynthState.makeSummary (gArrayLiveReadSysex.size(),
                                                        liveReadSysexTotalBytes()));
+
+#if JUCE_DEBUG
+    gLiveSynthState.debugLogSnapshotAfterSync ("StopSync");
+    Sy99ParamRegistry::debugLogOutselAuditAll (gLiveSynthState, "StopSync", nullptr, nullptr);
+#endif
 }
 
 inline void toggleLiveVoiceReadFromSy99()

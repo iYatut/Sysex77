@@ -52,9 +52,12 @@
 | anchor + 6 | ELDT E2 | `03 20 00 01` | ✅ elmode **8** | fixtures 01, 02 |
 | anchor + 6 | ELDT E2 | `03 20 00 01` | ❌ elmode **4** | fixture 03 — нужен diff |
 | anchor + 7 | ELNS E2 | `03 20 00 02` | ✅ | sysex VV=64 (=UI 0) |
-| ELVL E1 + Δ | EFLN1EL El.1 | `03 00 00 0A` | ✅ | Δ=36 (wol@94), 37 (wol@93), 35 (wol@95); EP=0x05 |
 | ELVL E1 + ? | ENLL / ENLH E1 | `03 00 00 03/04` | ❌ | нет raw 36/103 в fixtures 01–03 |
-| ? | EFSDLV / EFSDVL El.1 | `03 00 00 0B/0C` | ❌ | нужен diff (EP FX 127) |
+| ELVL E1 + Δ | EFLN1EL El.1 | live `03 00 00 09` | ✅ bulk | Δ=36 (wol@94), 37 (wol@93), 35 (wol@95); EP=0x05 |
+| efln + 1 | EFSDLV El.1 | live `03 00 00 0A` | ⚠ candidate | fixture 03 bulk=0 vs LCD lvl 127 — нужен diff |
+| efln + 2 | EFSDVSNS El.1 | live `03 00 00 0B` | ⚠ candidate | signed7 ladder; bulk offset unconfirmed |
+| efln + 3 | EFSDSCL El.1 | live `03 00 00 0C` | ⚠ candidate | signed7 ladder; bulk offset unconfirmed |
+| ? | EFMODE | live `08 00 00 20` | ✅ **0040 @+33** | fixtures 06–08: 0/1/2 = Off/Serial/Parallel |
 
 **anchor** = первый `7F 01 7F` после ELVL E1 (E2 strip). **outsel** = байт @ ELVL E1 + 1.
 
@@ -66,6 +69,7 @@ Primary block @36–56 (дубликат @57–76 игнорировать). Tai
 
 | Offset | Параметр | NN | Подтверждено | Значение fixtures 01–03 |
 |--------|----------|-----|--------------|-------------------------|
+| **33** | **EFMODE** | live 0x20 | **✅** | fixtures 06–08: 0/1/2 |
 | **41** | **WPBR** | 0x28 | **✅** | ANONIM=2; 02/03=0 |
 | **55** | **WLLML** | 0x39 | **✅** | 100 (0x64) все |
 | **98** | **SPTPNT** | 0x43 | **✅** | 60 (0x3C) все |
@@ -91,7 +95,10 @@ Primary block @36–56 (дубликат @57–76 игнорировать). Tai
 | [`fixtures/03_ep_classic_07x1_voice.syx`](fixtures/03_ep_classic_07x1_voice.syx) | 475+115 | elmode 4; FX send |
 | [`fixtures/04_anonim_outsel_both.syx`](fixtures/04_anonim_outsel_both.syx) | OUTSEL E1 @+98 | diff both |
 | [`fixtures/05_anonim_outsel_g1.syx`](fixtures/05_anonim_outsel_g1.syx) | OUTSEL E1 @+98 | diff G1 |
+| [`fixtures/06_efmode_off_ep_grndual.syx`](fixtures/06_efmode_off_ep_grndual.syx) | 0040 @+33=0 | EFMODE Off |
+| [`fixtures/07_efmode_serial_ep_grndual.syx`](fixtures/07_efmode_serial_ep_grndual.syx) | 0040 @+33=1 | EFMODE Serial |
+| [`fixtures/08_efmode_parallel_ep_grndual.syx`](fixtures/08_efmode_parallel_ep_grndual.syx) | 0040 @+33=2 | EFMODE Parallel |
 
 ---
 
-*Последнее обновление: Stage 1 fixture proof (2026-05-20). Regression: `_validate_bulk_parse.py` PASS fixtures 01–03.*
+*Последнее обновление: 2026-05-21. Regression: `_validate_bulk_parse.py` + `_validate_efmode_bulk.py`.*

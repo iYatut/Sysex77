@@ -15,6 +15,7 @@ Extraction note:
   either run OCR on the PDF or use a text-native edition if Yamaha provides one.
 
 Related project docs:
-  _agent_context/02_sysex_format.md — SysEx layout vs Sysex77 code
+  _agent_context/02_sysex_format.md — Parameter change SysEx layout vs Sysex77 code
+  _agent_context/sy99_bulk_dump_request.md — Bulk Dump Request/Response (LM 0040VC/MU/SY/MS), Deep Research 2026-05-23
   _agent_context/03_parameter_map.csv — Voice Common (group 02) from manual transcription + observed code cross-refs
   _agent_context/sy99_sysex_complete.md — full SY99 SysEx reference (transcription from service manual; user-supplied copy)

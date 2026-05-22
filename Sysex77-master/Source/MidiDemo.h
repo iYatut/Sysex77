@@ -468,6 +468,11 @@ public:
             {
                 voicePage->commitEditorSessionToLiveSynthBaseline();
             };
+
+            Sy99ParamRegistry::metaRegistryChangedCallback() = [voicePage]()
+            {
+                voicePage->refreshEnumCombosFromMetaRegistry();
+            };
         }
 
         Sy99HardwareMappingRuntime::setHandlers (

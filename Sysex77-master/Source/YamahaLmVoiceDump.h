@@ -58,6 +58,8 @@ namespace YamahaLmVoiceDump
     constexpr int kLm0040RndpOffset = 52;
     constexpr int kLm0040AftmdOffset = 100;
     constexpr int kLm0040SptpntOffset = 98;
+    /** Effect mode (live `08 00 00 20`): Off=0 Serial=1 Parallel=2. Confirmed fixtures 06–08 @+33. */
+    constexpr int kLm0040EfmodeOffset = 33;
 
     inline int uiFromElementNoteShiftSysex (int sysexVal) noexcept
     {
@@ -66,7 +68,12 @@ namespace YamahaLmVoiceDump
 
     inline int uiFromMixerEffectSendSigned7Sysex (int sysexVal) noexcept
     {
-        switch ((uint8) juce::jlimit (0, 127, sysexVal))
+        const int raw = juce::jlimit (0, 127, sysexVal);
+
+        if (raw >= 0x79 && raw <= 0x7F)
+            return raw - 0x80;
+
+        switch ((uint8) raw)
         {
             case 0x00: return 0;
             case 0x01: return 1;
@@ -148,25 +155,12 @@ namespace YamahaLmVoiceDump
 
     inline int sysexFromMixerEffectSendSigned7Ui (int uiVal) noexcept
     {
-        switch (juce::jlimit (-7, 7, uiVal))
-        {
-            case -7: return 0x0F;
-            case -6: return 0x0E;
-            case -5: return 0x0D;
-            case -4: return 0x0C;
-            case -3: return 0x0B;
-            case -2: return 0x0A;
-            case -1: return 0x09;
-            case  0: return 0x00;
-            case  1: return 0x01;
-            case  2: return 0x02;
-            case  3: return 0x03;
-            case  4: return 0x04;
-            case  5: return 0x05;
-            case  6: return 0x06;
-            case  7: return 0x07;
-            default: return 0x00;
-        }
+        uiVal = juce::jlimit (-7, 7, uiVal);
+
+        if (uiVal < 0)
+            return 0x80 + uiVal;
+
+        return uiVal;
     }
 
     inline int efln1ElOffsetFromElvlWol (int elvlOff, int wolOff) noexcept
@@ -176,6 +170,42 @@ namespace YamahaLmVoiceDump
         if (wolOff == 95)
             return elvlOff + 35;
         return elvlOff + 36;
+    }
+
+    /** EFSDLV bulk @ EFLN1EL + 12 (fixture 03 EP:Classic lvl 127 @ efln+12). */
+    constexpr int kLm8101VcEfsdlvDeltaFromEfln = 12;
+
+    inline bool eldtE1UsesOutselStrip (int elmodeRaw) noexcept
+    {
+        switch (elmodeRaw)
+        {
+            case 1:  // AFMMono2
+            case 4:  // AFMPoly2
+            case 6:  // AWMPoly2
+            case 8:  // AFM1AWM1
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    inline bool eldtE2UsesFirstAnchor (int elmodeRaw) noexcept
+    {
+        switch (elmodeRaw)
+        {
+            case 4:  // AFMPoly2
+            case 8:  // AFM1AWM1
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    /** OUTSEL VV (0/2/4/6) from packed mixer byte; bits 1–2 only (bit 0 may carry ELDT when shared). */
+    inline int outselRawFromPackedByte8101 (uint8 packed, bool eldtSharesByte) noexcept
+    {
+        juce::ignoreUnused (eldtSharesByte);
+        return (int) (packed & 0x06);
     }
 
     inline int findFirstMixerAnchor (const uint8* frame, int frameSize) noexcept
@@ -209,6 +239,55 @@ namespace YamahaLmVoiceDump
         }
 
         return -1;
+    }
+
+    /** Audit-only: log first mixer anchor context (does not affect parsing). */
+    inline void auditLm8101MixerAnchor (const uint8* frame, int frameSize) noexcept
+    {
+        const int anchor = findFirstMixerAnchor (frame, frameSize);
+
+        if (anchor < 0)
+        {
+            juce::Logger::writeToLog ("[8101 anchor audit] no 7F 01 7F anchor (frameSize="
+                                      + juce::String (frameSize) + ")");
+            return;
+        }
+
+        juce::String hexDump;
+
+        for (int i = 0; i < 20 && anchor + i < frameSize; ++i)
+        {
+            if (i > 0)
+                hexDump << ' ';
+
+            hexDump << juce::String::toHexString ((int) frame[anchor + i]).toUpperCase()
+                                         .paddedLeft ('0', 2);
+        }
+
+        const bool insidePackedNameOrData = anchor < 64;
+
+        int secondaryAfter110 = -1;
+        const int searchStart = juce::jmax (111, 90);
+        const int searchEnd = juce::jmin (frameSize - 7, 125);
+
+        for (int a = searchStart; a <= searchEnd; ++a)
+        {
+            if (frame[a] == 0x7f && frame[a + 1] == 0x01 && frame[a + 2] == 0x7f)
+            {
+                secondaryAfter110 = a;
+                break;
+            }
+        }
+
+        const juce::String secondaryStr = secondaryAfter110 >= 0
+                                              ? juce::String (secondaryAfter110)
+                                              : juce::String ("none");
+
+        juce::Logger::writeToLog ("[8101 anchor audit] anchorPos=" + juce::String (anchor)
+                                  + " insidePackedNameOrData(<64)="
+                                  + juce::String ((int) insidePackedNameOrData)
+                                  + " hex20=" + hexDump
+                                  + " secondaryAnchorAfter110=" + secondaryStr);
     }
 
     /** Anchor strips for ELNS E2..E4 (E1 uses outsel strip, not anchors). */
@@ -252,6 +331,7 @@ namespace YamahaLmVoiceDump
         int lmEfln1ElRaw = -1;
         int lmEfsdlvRaw = -1;
         int lmEfsdvlRaw = -1;
+        int lmEfsdsclRaw = -1;
         int elmodeOffset = -1;
         int wolOffset = -1;
         int elvlE1Offset = -1;
@@ -285,6 +365,7 @@ namespace YamahaLmVoiceDump
         int rndpRaw = -1;
         int aftmdRaw = -1;
         int sptpntRaw = -1;
+        int efmodeRaw = -1;
     };
 
     inline bool tagsEqual6 (const uint8* at, const char* tag6) noexcept
@@ -301,7 +382,6 @@ namespace YamahaLmVoiceDump
     {
         LmBlockView out;
         const auto* bytes = static_cast<const uint8*> (data);
-        const size_t tagLen = 6;
 
         if (bytes == nullptr || dataSize < 16 || tag6 == nullptr)
             return out;
@@ -338,10 +418,26 @@ namespace YamahaLmVoiceDump
         return out;
     }
 
+    inline bool appendWrappedSysexBody (juce::MemoryBlock& out,
+                                        const uint8* body, int bodyLen) noexcept
+    {
+        if (body == nullptr || bodyLen <= 0 || body[0] != 0x43)
+            return false;
+
+        out.setSize ((size_t) bodyLen + 2, true);
+        auto* w = static_cast<uint8*> (out.getData());
+        w[0] = 0xf0;
+        std::memcpy (w + 1, body, (size_t) bodyLen);
+        w[bodyLen + 1] = 0xf7;
+        return true;
+    }
+
     /** LiveRead capture: prefer full MIDI bytes (F0…F7); getSysExData() is body-only (starts 0x43). */
     inline LmBlockView findLmBlockInSysexMessages (const juce::Array<juce::MidiMessage>& messages,
                                                    const char* tag6) noexcept
     {
+        juce::MemoryBlock wrapped;
+
         for (const auto& m : messages)
         {
             if (! m.isSysEx())
@@ -352,18 +448,43 @@ namespace YamahaLmVoiceDump
 
             if (raw != nullptr && rawN > 0)
             {
-                const auto block = findLmBlock (raw, (size_t) rawN, tag6);
+                if (raw[0] == 0xf0)
+                {
+                    const auto block = findLmBlock (raw, (size_t) rawN, tag6);
 
-                if (block.data != nullptr)
-                    return block;
+                    if (block.data != nullptr)
+                        return block;
+                }
+                else if (raw[0] == 0x43 && appendWrappedSysexBody (wrapped, raw, rawN))
+                {
+                    const auto* w = static_cast<const uint8*> (wrapped.getData());
+                    const auto block = findLmBlock (w, wrapped.getSize(), tag6);
+
+                    if (block.data != nullptr)
+                        return block;
+                }
             }
 
             const auto* d = m.getSysExData();
             const int n = m.getSysExDataSize();
 
-            if (d != nullptr && n > 0 && d[0] == 0xf0)
+            if (d == nullptr || n <= 0)
+                continue;
+
+            if (d[0] == 0xf0)
             {
                 const auto block = findLmBlock (d, (size_t) n, tag6);
+
+                if (block.data != nullptr)
+                    return block;
+
+                continue;
+            }
+
+            if (d[0] == 0x43 && appendWrappedSysexBody (wrapped, d, n))
+            {
+                const auto* w = static_cast<const uint8*> (wrapped.getData());
+                const auto block = findLmBlock (w, wrapped.getSize(), tag6);
 
                 if (block.data != nullptr)
                     return block;
@@ -371,6 +492,100 @@ namespace YamahaLmVoiceDump
         }
 
         return {};
+    }
+
+    /** Concatenate LiveRead SysEx bytes (same layout as saveLiveReadCaptureToSyx .syx). */
+    inline juce::MemoryBlock concatLiveReadSysexRaw (
+        const juce::Array<juce::MidiMessage>& messages) noexcept
+    {
+        juce::MemoryBlock out;
+        juce::MemoryBlock wrapped;
+
+        for (const auto& m : messages)
+        {
+            if (! m.isSysEx())
+                continue;
+
+            const uint8* raw = m.getRawData();
+            const int rawN = m.getRawDataSize();
+
+            if (raw != nullptr && rawN > 0)
+            {
+                if (raw[0] == 0xf0)
+                {
+                    out.append (raw, (size_t) rawN);
+                    continue;
+                }
+
+                if (raw[0] == 0x43 && appendWrappedSysexBody (wrapped, raw, rawN))
+                {
+                    out.append (wrapped.getData(), wrapped.getSize());
+                    continue;
+                }
+
+                out.append (raw, (size_t) rawN);
+                continue;
+            }
+
+            const uint8* d = m.getSysExData();
+            const int n = m.getSysExDataSize();
+
+            if (d != nullptr && n > 0 && appendWrappedSysexBody (wrapped, d, n))
+                out.append (wrapped.getData(), wrapped.getSize());
+        }
+
+        return out;
+    }
+
+    inline bool frameContainsLmTag (const uint8* frame, int frameSize, const char* tag6) noexcept
+    {
+        return findLmBlock (frame, (size_t) frameSize, tag6).data != nullptr;
+    }
+
+    /** SY99 voice dumps pair 8101VC with a following 0040VC frame in the same .syx. */
+    inline bool findPaired0040FrameAfter (const uint8* fileData, size_t fileSize,
+                                          int afterFrameEnd, int& outOffset, int& outLength) noexcept
+    {
+        outOffset = -1;
+        outLength = 0;
+
+        if (fileData == nullptr || fileSize < 16 || afterFrameEnd < 0)
+            return false;
+
+        size_t i = (size_t) afterFrameEnd;
+
+        while (i < fileSize)
+        {
+            if (fileData[i] != 0xf0)
+            {
+                ++i;
+                continue;
+            }
+
+            size_t j = i + 1;
+
+            while (j < fileSize && fileData[j] != 0xf7)
+                ++j;
+
+            if (j >= fileSize)
+                break;
+
+            const int frameLen = (int) (j - i + 1);
+
+            if (frameContainsLmTag (fileData + (size_t) i, frameLen, "0040VC"))
+            {
+                outOffset = (int) i;
+                outLength = frameLen;
+                return true;
+            }
+
+            if (frameContainsLmTag (fileData + (size_t) i, frameLen, "8101VC"))
+                break;
+
+            i = j + 1;
+        }
+
+        return false;
     }
 
     inline void copyVoiceName (const uint8* frame, int frameSize, char* dest, int destSize) noexcept
@@ -531,11 +746,11 @@ namespace YamahaLmVoiceDump
 
         if (outselOff > 0 && outselOff + 4 < frameSize)
         {
-            out.lmElnsRaw[0] = uiFromElementNoteShiftSysex ((int) frame[outselOff + 1]);
+            out.lmElnsRaw[0] = (int) frame[outselOff + 1];
             out.lmEvlhRaw[0] = (int) frame[outselOff + 3];
             out.lmEvllRaw[0] = (int) frame[outselOff + 4];
 
-            if (out.elmodeRaw == 4)
+            if (eldtE1UsesOutselStrip (out.elmodeRaw))
                 out.lmEldtRaw[0] = (int) frame[outselOff];
         }
 
@@ -545,6 +760,15 @@ namespace YamahaLmVoiceDump
 
             if (eflnOff >= 0 && eflnOff < frameSize)
                 out.lmEfln1ElRaw = (int) frame[eflnOff];
+
+            if (eflnOff >= 0 && eflnOff + kLm8101VcEfsdlvDeltaFromEfln < frameSize)
+                out.lmEfsdlvRaw = (int) frame[eflnOff + kLm8101VcEfsdlvDeltaFromEfln];
+
+            if (eflnOff >= 0 && eflnOff + 3 < frameSize)
+            {
+                out.lmEfsdvlRaw = (int) frame[eflnOff + 2];
+                out.lmEfsdsclRaw = (int) frame[eflnOff + 3];
+            }
         }
 
         const int maxElnsAnchors = maxElnsAnchorSlotsFromElmodeRaw (out.elmodeRaw);
@@ -562,7 +786,7 @@ namespace YamahaLmVoiceDump
                     if (elIdx < 4)
                     {
                         out.lmOutselRaw[elIdx] = (int) (frame[anchor + 4] & 0x06);
-                        out.lmElnsRaw[elIdx] = uiFromElementNoteShiftSysex ((int) frame[anchor + 7]);
+                        out.lmElnsRaw[elIdx] = (int) frame[anchor + 7];
                         out.lmEvlhRaw[elIdx] = (int) frame[anchor + 9];
                         out.lmEvllRaw[elIdx] = (int) frame[anchor + 10];
                     }
@@ -575,7 +799,7 @@ namespace YamahaLmVoiceDump
                             out.elvlOffset[1] = anchor + 5;
                         }
 
-                        if (out.elmodeRaw == 8)
+                        if (eldtE2UsesFirstAnchor (out.elmodeRaw))
                             out.lmEldtRaw[1] = (int) frame[anchor + 6];
                     }
                 }
@@ -632,6 +856,7 @@ namespace YamahaLmVoiceDump
         readByteIfInRange (frame, frameSize, kLm0040RndpOffset, out.rndpRaw);
         readByteIfInRange (frame, frameSize, kLm0040AftmdOffset, out.aftmdRaw);
         readByteIfInRange (frame, frameSize, kLm0040SptpntOffset, out.sptpntRaw);
+        readByteIfInRange (frame, frameSize, kLm0040EfmodeOffset, out.efmodeRaw);
 
         return true;
     }
@@ -645,6 +870,13 @@ namespace YamahaLmVoiceDump
     inline bool parseLm0040VcMinimalFromSysexMessages (const juce::Array<juce::MidiMessage>& messages,
                                                        Lm0040VcMinimal& out) noexcept
     {
+        {
+            const auto block = findLmBlockInSysexMessages (messages, "0040VC");
+
+            if (block.data != nullptr && parseLm0040VcMinimal (block.data, block.size, out))
+                return true;
+        }
+
         juce::MemoryBlock wrapped;
 
         for (const auto& m : messages)
@@ -655,10 +887,23 @@ namespace YamahaLmVoiceDump
             const uint8* raw = m.getRawData();
             const int rawN = m.getRawDataSize();
 
-            if (raw != nullptr && rawN > 0 && raw[0] == 0xf0)
+            if (raw != nullptr && rawN > 0)
             {
-                if (parseLm0040VcMinimal (raw, rawN, out))
-                    return true;
+                if (raw[0] == 0xf0)
+                {
+                    const auto block = findLmBlock (raw, (size_t) rawN, "0040VC");
+
+                    if (block.data != nullptr && parseLm0040VcMinimal (block.data, block.size, out))
+                        return true;
+                }
+                else if (raw[0] == 0x43 && appendWrappedSysexBody (wrapped, raw, rawN))
+                {
+                    const auto* w = static_cast<const uint8*> (wrapped.getData());
+                    const auto block = findLmBlock (w, wrapped.getSize(), "0040VC");
+
+                    if (block.data != nullptr && parseLm0040VcMinimal (block.data, block.size, out))
+                        return true;
+                }
 
                 continue;
             }
@@ -671,7 +916,9 @@ namespace YamahaLmVoiceDump
 
             if (d[0] == 0xf0)
             {
-                if (parseLm0040VcMinimal (d, n, out))
+                const auto block = findLmBlock (d, (size_t) n, "0040VC");
+
+                if (block.data != nullptr && parseLm0040VcMinimal (block.data, block.size, out))
                     return true;
 
                 continue;
@@ -680,14 +927,39 @@ namespace YamahaLmVoiceDump
             if (d[0] != 0x43)
                 continue;
 
-            wrapped.setSize ((size_t) n + 2, true);
-            auto* w = static_cast<uint8*> (wrapped.getData());
-            w[0] = 0xf0;
-            std::memcpy (w + 1, d, (size_t) n);
-            w[n + 1] = 0xf7;
+            if (! appendWrappedSysexBody (wrapped, d, n))
+                continue;
 
-            if (parseLm0040VcMinimal (w, n + 2, out))
+            const auto* w = static_cast<const uint8*> (wrapped.getData());
+            const auto block = findLmBlock (w, wrapped.getSize(), "0040VC");
+
+            if (block.data != nullptr && parseLm0040VcMinimal (block.data, block.size, out))
                 return true;
+        }
+
+        const juce::MemoryBlock concat = concatLiveReadSysexRaw (messages);
+
+        if (concat.getSize() > 0)
+        {
+            const auto block = findLmBlock (concat.getData(), concat.getSize(), "0040VC");
+
+            if (block.data != nullptr && parseLm0040VcMinimal (block.data, block.size, out))
+                return true;
+
+            const auto b8101 = findLmBlock (concat.getData(), concat.getSize(), "8101VC");
+
+            if (b8101.data != nullptr)
+            {
+                const auto* bytes = static_cast<const uint8*> (concat.getData());
+                const int afterEnd = (int) ((b8101.data - bytes) + b8101.size);
+                int pairedOff = -1;
+                int pairedLen = 0;
+
+                if (findPaired0040FrameAfter (bytes, concat.getSize(), afterEnd, pairedOff, pairedLen)
+                    && pairedOff >= 0 && pairedLen > 0
+                    && parseLm0040VcMinimal (bytes + (size_t) pairedOff, pairedLen, out))
+                    return true;
+            }
         }
 
         return false;
@@ -786,17 +1058,60 @@ namespace YamahaLmVoiceDump
             {
                 const uint8 packed = frame[outselOff];
                 out.lmOutselE1Offset = outselOff;
-                out.lmOutselE1Raw = (int) (packed & 0x06);
+                out.lmOutselE1Raw = outselRawFromPackedByte8101 (packed,
+                                                                  eldtE1UsesOutselStrip (out.elmodeRaw));
             }
         }
         else if (frameSize > kLm8101VcOutselE1OffsetTypical)
         {
             const uint8 packed = frame[kLm8101VcOutselE1OffsetTypical];
             out.lmOutselE1Offset = kLm8101VcOutselE1OffsetTypical;
-            out.lmOutselE1Raw = (int) (packed & 0x06);
+            out.lmOutselE1Raw = outselRawFromPackedByte8101 (packed,
+                                                             eldtE1UsesOutselStrip (out.elmodeRaw));
         }
 
         parseMixerTail8101 (frame, frameSize, out);
+
+#if JUCE_DEBUG
+        {
+            for (int e = 0; e < 4; ++e)
+            {
+                const int bulk = e == 0 ? out.lmOutselE1Raw : out.lmOutselRaw[e];
+                juce::Logger::writeToLog ("[OUTSEL audit] stage=8101-parse"
+                                          + juce::String (" idx=") + juce::String (e)
+                                          + " liveRaw=- bulk8101Raw="
+                                          + (bulk >= 0
+                                                 ? juce::String (bulk) + "(0x"
+                                                   + juce::String::toHexString (bulk & 0x7f)
+                                                        .toUpperCase().paddedLeft ('0', 2) + ")"
+                                                 : juce::String ("-"))
+                                          + " resolved=- ui=- baseline=-");
+            }
+
+            for (int e = 0; e < 4; ++e)
+            {
+                juce::Logger::writeToLog ("[ELDT audit] stage=parse8101 idx=" + juce::String (e)
+                                          + " parsedRaw="
+                                          + (out.lmEldtRaw[e] != -1
+                                                 ? juce::String (out.lmEldtRaw[e])
+                                                 : juce::String ("-")));
+            }
+
+            const struct { const char* tag; int raw; } efsendFields[] = {
+                { "EFLN1EL",  out.lmEfln1ElRaw },
+                { "EFSDLV",   out.lmEfsdlvRaw },
+                { "EFSDVSNS", out.lmEfsdvlRaw },
+                { "EFSDSCL",  out.lmEfsdsclRaw },
+            };
+
+            for (const auto& f : efsendFields)
+            {
+                juce::Logger::writeToLog ("[EFSEND audit] stage=parse8101 field=" + juce::String (f.tag)
+                                          + " idx=0 parsedRaw="
+                                          + (f.raw >= 0 ? juce::String (f.raw) : juce::String ("-")));
+            }
+        }
+#endif
 
         return true;
     }
@@ -810,6 +1125,16 @@ namespace YamahaLmVoiceDump
     inline bool parseLm8101VcMinimalFromSysexMessages (const juce::Array<juce::MidiMessage>& messages,
                                                        Lm8101VcMinimal& out) noexcept
     {
+        {
+            const auto block = findLmBlockInSysexMessages (messages, "8101VC");
+
+            if (block.data != nullptr && parseLm8101VcMinimal (block.data, block.size, out))
+            {
+                auditLm8101MixerAnchor (block.data, block.size);
+                return true;
+            }
+        }
+
         juce::MemoryBlock wrapped;
 
         for (const auto& m : messages)
@@ -820,10 +1145,29 @@ namespace YamahaLmVoiceDump
             const uint8* raw = m.getRawData();
             const int rawN = m.getRawDataSize();
 
-            if (raw != nullptr && rawN > 0 && raw[0] == 0xf0)
+            if (raw != nullptr && rawN > 0)
             {
-                if (parseLm8101VcMinimal (raw, rawN, out))
-                    return true;
+                if (raw[0] == 0xf0)
+                {
+                    const auto block = findLmBlock (raw, (size_t) rawN, "8101VC");
+
+                    if (block.data != nullptr && parseLm8101VcMinimal (block.data, block.size, out))
+                    {
+                        auditLm8101MixerAnchor (block.data, block.size);
+                        return true;
+                    }
+                }
+                else if (raw[0] == 0x43 && appendWrappedSysexBody (wrapped, raw, rawN))
+                {
+                    const auto* w = static_cast<const uint8*> (wrapped.getData());
+                    const auto block = findLmBlock (w, wrapped.getSize(), "8101VC");
+
+                    if (block.data != nullptr && parseLm8101VcMinimal (block.data, block.size, out))
+                    {
+                        auditLm8101MixerAnchor (block.data, block.size);
+                        return true;
+                    }
+                }
 
                 continue;
             }
@@ -836,8 +1180,13 @@ namespace YamahaLmVoiceDump
 
             if (d[0] == 0xf0)
             {
-                if (parseLm8101VcMinimal (d, n, out))
+                const auto block = findLmBlock (d, (size_t) n, "8101VC");
+
+                if (block.data != nullptr && parseLm8101VcMinimal (block.data, block.size, out))
+                {
+                    auditLm8101MixerAnchor (block.data, block.size);
                     return true;
+                }
 
                 continue;
             }
@@ -845,14 +1194,30 @@ namespace YamahaLmVoiceDump
             if (d[0] != 0x43)
                 continue;
 
-            wrapped.setSize ((size_t) n + 2, true);
-            auto* w = static_cast<uint8*> (wrapped.getData());
-            w[0] = 0xf0;
-            std::memcpy (w + 1, d, (size_t) n);
-            w[n + 1] = 0xf7;
+            if (! appendWrappedSysexBody (wrapped, d, n))
+                continue;
 
-            if (parseLm8101VcMinimal (w, n + 2, out))
+            const auto* w = static_cast<const uint8*> (wrapped.getData());
+            const auto block = findLmBlock (w, wrapped.getSize(), "8101VC");
+
+            if (block.data != nullptr && parseLm8101VcMinimal (block.data, block.size, out))
+            {
+                auditLm8101MixerAnchor (block.data, block.size);
                 return true;
+            }
+        }
+
+        const juce::MemoryBlock concat = concatLiveReadSysexRaw (messages);
+
+        if (concat.getSize() > 0)
+        {
+            const auto block = findLmBlock (concat.getData(), concat.getSize(), "8101VC");
+
+            if (block.data != nullptr && parseLm8101VcMinimal (block.data, block.size, out))
+            {
+                auditLm8101MixerAnchor (block.data, block.size);
+                return true;
+            }
         }
 
         return false;
@@ -974,6 +1339,9 @@ namespace YamahaLmVoiceDump
         if (p.sptpntRaw >= 0)
             s << " SPTPNT=" << p.sptpntRaw;
 
+        if (p.efmodeRaw >= 0)
+            s << " EFMODE=" << p.efmodeRaw;
+
         if (p.atpbrRaw >= 0)
             s << " ATPBR=" << p.atpbrRaw;
 
@@ -983,54 +1351,218 @@ namespace YamahaLmVoiceDump
         return s;
     }
 
-    inline bool frameContainsLmTag (const uint8* frame, int frameSize, const char* tag6) noexcept
+#if JUCE_DEBUG
+
+    /** Debug-only: build LiveRead-style SysEx messages from a single F0…F7 frame (not for production). */
+    inline juce::Array<juce::MidiMessage> debugBuildLiveReadMessagesFromFrame (
+        const uint8* frame, int frameSize, bool useBodyOnlySysexData) noexcept
     {
-        return findLmBlock (frame, (size_t) frameSize, tag6).data != nullptr;
-    }
+        juce::Array<juce::MidiMessage> msgs;
 
-    /** SY99 voice dumps pair 8101VC with a following 0040VC frame in the same .syx. */
-    inline bool findPaired0040FrameAfter (const uint8* fileData, size_t fileSize,
-                                          int afterFrameEnd, int& outOffset, int& outLength) noexcept
-    {
-        outOffset = -1;
-        outLength = 0;
+        if (frame == nullptr || frameSize < 2 || frame[0] != 0xf0 || frame[frameSize - 1] != 0xf7)
+            return msgs;
 
-        if (fileData == nullptr || fileSize < 16 || afterFrameEnd < 0)
-            return false;
+        const int bodyLen = frameSize - 2;
+        const uint8* body = frame + 1;
 
-        size_t i = (size_t) afterFrameEnd;
+        if (bodyLen <= 0)
+            return msgs;
 
-        while (i < fileSize)
+        if (useBodyOnlySysexData)
         {
-            if (fileData[i] != 0xf0)
-            {
-                ++i;
-                continue;
-            }
-
-            size_t j = i + 1;
-
-            while (j < fileSize && fileData[j] != 0xf7)
-                ++j;
-
-            if (j >= fileSize)
-                break;
-
-            const int frameLen = (int) (j - i + 1);
-
-            if (frameContainsLmTag (fileData + (size_t) i, frameLen, "0040VC"))
-            {
-                outOffset = (int) i;
-                outLength = frameLen;
-                return true;
-            }
-
-            if (frameContainsLmTag (fileData + (size_t) i, frameLen, "8101VC"))
-                break;
-
-            i = j + 1;
+            if (body[0] == 0x43)
+                msgs.add (juce::MidiMessage::createSysExMessage (body, bodyLen));
+        }
+        else
+        {
+            msgs.add (juce::MidiMessage::createSysExMessage (body, bodyLen));
         }
 
-        return false;
+        return msgs;
     }
+
+    inline juce::String debugSelfTestFormatIntField (int v) noexcept
+    {
+        if (v < 0)
+            return "--/--";
+
+        return juce::String (v) + "/0x"
+               + juce::String::toHexString (v).toUpperCase().paddedLeft ('0', v > 0xff ? 4 : 2);
+    }
+
+    inline void debugSelfTestLogIntMismatch (const char* tag, const char* fieldName,
+                                             int fileVal, int liveVal, bool& ok) noexcept
+    {
+        if (fileVal == liveVal)
+            return;
+
+        ok = false;
+        juce::Logger::writeToLog (juce::String ("[") + tag + " self-test] field=" + fieldName
+                                  + " file=" + debugSelfTestFormatIntField (fileVal)
+                                  + " live=" + debugSelfTestFormatIntField (liveVal));
+    }
+
+    inline bool debugSelfTestCompareLm8101VcMinimal (const Lm8101VcMinimal& fileParsed,
+                                                     const Lm8101VcMinimal& liveParsed) noexcept
+    {
+        bool ok = true;
+
+        if (fileParsed.found8101 != liveParsed.found8101)
+        {
+            ok = false;
+            juce::Logger::writeToLog ("[LM8101 self-test] field=found8101 file="
+                                      + juce::String ((int) fileParsed.found8101)
+                                      + " live=" + juce::String ((int) liveParsed.found8101));
+        }
+
+        if (std::strcmp (fileParsed.name, liveParsed.name) != 0)
+        {
+            ok = false;
+            juce::Logger::writeToLog ("[LM8101 self-test] field=name file=\""
+                                      + juce::String (fileParsed.name).trimEnd()
+                                      + "\" live=\"" + juce::String (liveParsed.name).trimEnd() + "\"");
+        }
+
+        debugSelfTestLogIntMismatch ("LM8101", "ELMODE", fileParsed.elmodeRaw, liveParsed.elmodeRaw, ok);
+        debugSelfTestLogIntMismatch ("LM8101", "WOL", fileParsed.wolRaw, liveParsed.wolRaw, ok);
+        debugSelfTestLogIntMismatch ("LM8101", "ELVL_E1", fileParsed.elvlE1Raw, liveParsed.elvlE1Raw, ok);
+        debugSelfTestLogIntMismatch ("LM8101", "OUTSEL_E1", fileParsed.lmOutselE1Raw, liveParsed.lmOutselE1Raw, ok);
+        debugSelfTestLogIntMismatch ("LM8101", "EFLN1EL", fileParsed.lmEfln1ElRaw, liveParsed.lmEfln1ElRaw, ok);
+        debugSelfTestLogIntMismatch ("LM8101", "EFSDLV", fileParsed.lmEfsdlvRaw, liveParsed.lmEfsdlvRaw, ok);
+        debugSelfTestLogIntMismatch ("LM8101", "EFSDVL", fileParsed.lmEfsdvlRaw, liveParsed.lmEfsdvlRaw, ok);
+        debugSelfTestLogIntMismatch ("LM8101", "EFSDSCL", fileParsed.lmEfsdsclRaw, liveParsed.lmEfsdsclRaw, ok);
+        debugSelfTestLogIntMismatch ("LM8101", "elmodeOffset", fileParsed.elmodeOffset, liveParsed.elmodeOffset, ok);
+        debugSelfTestLogIntMismatch ("LM8101", "wolOffset", fileParsed.wolOffset, liveParsed.wolOffset, ok);
+        debugSelfTestLogIntMismatch ("LM8101", "elvlE1Offset", fileParsed.elvlE1Offset, liveParsed.elvlE1Offset, ok);
+        debugSelfTestLogIntMismatch ("LM8101", "outselE1Offset", fileParsed.lmOutselE1Offset, liveParsed.lmOutselE1Offset, ok);
+
+        static const char* const kElvlFields[] = { "ELVL_E1", "ELVL_E2", "ELVL_E3", "ELVL_E4" };
+        static const char* const kOutselFields[] = { "OUTSEL_E1", "OUTSEL_E2", "OUTSEL_E3", "OUTSEL_E4" };
+        static const char* const kEldtFields[] = { "ELDT_E1", "ELDT_E2", "ELDT_E3", "ELDT_E4" };
+        static const char* const kElnsFields[] = { "ELNS_E1", "ELNS_E2", "ELNS_E3", "ELNS_E4" };
+        static const char* const kEvllFields[] = { "EVLL_E1", "EVLL_E2", "EVLL_E3", "EVLL_E4" };
+        static const char* const kEvlhFields[] = { "EVLH_E1", "EVLH_E2", "EVLH_E3", "EVLH_E4" };
+        static const char* const kElvlOffFields[] = { "elvlOffset_E1", "elvlOffset_E2", "elvlOffset_E3", "elvlOffset_E4" };
+
+        for (int e = 0; e < 4; ++e)
+        {
+            debugSelfTestLogIntMismatch ("LM8101", kElvlFields[e], fileParsed.elvlRaw[e], liveParsed.elvlRaw[e], ok);
+            debugSelfTestLogIntMismatch ("LM8101", kOutselFields[e], fileParsed.lmOutselRaw[e], liveParsed.lmOutselRaw[e], ok);
+            debugSelfTestLogIntMismatch ("LM8101", kEldtFields[e], fileParsed.lmEldtRaw[e], liveParsed.lmEldtRaw[e], ok);
+            debugSelfTestLogIntMismatch ("LM8101", kElnsFields[e], fileParsed.lmElnsRaw[e], liveParsed.lmElnsRaw[e], ok);
+            debugSelfTestLogIntMismatch ("LM8101", kEvllFields[e], fileParsed.lmEvllRaw[e], liveParsed.lmEvllRaw[e], ok);
+            debugSelfTestLogIntMismatch ("LM8101", kEvlhFields[e], fileParsed.lmEvlhRaw[e], liveParsed.lmEvlhRaw[e], ok);
+            debugSelfTestLogIntMismatch ("LM8101", kElvlOffFields[e], fileParsed.elvlOffset[e], liveParsed.elvlOffset[e], ok);
+        }
+
+        return ok;
+    }
+
+    inline bool debugSelfTestCompareLm0040VcMinimal (const Lm0040VcMinimal& fileParsed,
+                                                     const Lm0040VcMinimal& liveParsed) noexcept
+    {
+        bool ok = true;
+
+        if (fileParsed.found0040 != liveParsed.found0040)
+        {
+            ok = false;
+            juce::Logger::writeToLog ("[LM0040 self-test] field=found0040 file="
+                                      + juce::String ((int) fileParsed.found0040)
+                                      + " live=" + juce::String ((int) liveParsed.found0040));
+        }
+
+        debugSelfTestLogIntMismatch ("LM0040", "WPBR", fileParsed.wpbrRaw, liveParsed.wpbrRaw, ok);
+        debugSelfTestLogIntMismatch ("LM0040", "ATPBR", fileParsed.atpbrRaw, liveParsed.atpbrRaw, ok);
+        debugSelfTestLogIntMismatch ("LM0040", "PMRNG", fileParsed.pmrngRaw, liveParsed.pmrngRaw, ok);
+        debugSelfTestLogIntMismatch ("LM0040", "PMASN", fileParsed.pmasnRaw, liveParsed.pmasnRaw, ok);
+        debugSelfTestLogIntMismatch ("LM0040", "AMASN", fileParsed.amasnRaw, liveParsed.amasnRaw, ok);
+        debugSelfTestLogIntMismatch ("LM0040", "AMRNG", fileParsed.amrngRaw, liveParsed.amrngRaw, ok);
+        debugSelfTestLogIntMismatch ("LM0040", "FMASN", fileParsed.fmasnRaw, liveParsed.fmasnRaw, ok);
+        debugSelfTestLogIntMismatch ("LM0040", "FMRNG", fileParsed.fmrngRaw, liveParsed.fmrngRaw, ok);
+        debugSelfTestLogIntMismatch ("LM0040", "PNLASN", fileParsed.pnlasnRaw, liveParsed.pnlasnRaw, ok);
+        debugSelfTestLogIntMismatch ("LM0040", "PNLRNG", fileParsed.pnlrngRaw, liveParsed.pnlrngRaw, ok);
+        debugSelfTestLogIntMismatch ("LM0040", "COASN", fileParsed.coasnRaw, liveParsed.coasnRaw, ok);
+        debugSelfTestLogIntMismatch ("LM0040", "CORNG", fileParsed.corngRaw, liveParsed.corngRaw, ok);
+        debugSelfTestLogIntMismatch ("LM0040", "PNBASN", fileParsed.pnbasnRaw, liveParsed.pnbasnRaw, ok);
+        debugSelfTestLogIntMismatch ("LM0040", "PNBRNG", fileParsed.pnbrngRaw, liveParsed.pnbrngRaw, ok);
+        debugSelfTestLogIntMismatch ("LM0040", "EGBASN", fileParsed.egbasnRaw, liveParsed.egbasnRaw, ok);
+        debugSelfTestLogIntMismatch ("LM0040", "EGBRNG", fileParsed.egbrngRaw, liveParsed.egbrngRaw, ok);
+        debugSelfTestLogIntMismatch ("LM0040", "WLASN", fileParsed.wlasnRaw, liveParsed.wlasnRaw, ok);
+        debugSelfTestLogIntMismatch ("LM0040", "WLLML", fileParsed.wllmlRaw, liveParsed.wllmlRaw, ok);
+        debugSelfTestLogIntMismatch ("LM0040", "MCTUN", fileParsed.mctunRaw, liveParsed.mctunRaw, ok);
+        debugSelfTestLogIntMismatch ("LM0040", "RNDP", fileParsed.rndpRaw, liveParsed.rndpRaw, ok);
+        debugSelfTestLogIntMismatch ("LM0040", "AFTMD", fileParsed.aftmdRaw, liveParsed.aftmdRaw, ok);
+        debugSelfTestLogIntMismatch ("LM0040", "SPTPNT", fileParsed.sptpntRaw, liveParsed.sptpntRaw, ok);
+        debugSelfTestLogIntMismatch ("LM0040", "EFMODE", fileParsed.efmodeRaw, liveParsed.efmodeRaw, ok);
+
+        return ok;
+    }
+
+    /** Debug-only: compare direct frame parse vs LiveRead glue for LM 8101VC. Not for production. */
+    inline bool debugSelfTestLm8101VcParsePaths (const uint8* frame, int frameSize,
+                                                 bool useBodyOnlySysexData = false) noexcept
+    {
+        Lm8101VcMinimal parsedFile;
+        Lm8101VcMinimal parsedLive;
+
+        if (! parseLm8101VcMinimal (frame, frameSize, parsedFile))
+        {
+            juce::Logger::writeToLog ("[LM8101 self-test] direct parse failed (frameSize="
+                                      + juce::String (frameSize) + ")");
+            return false;
+        }
+
+        const auto msgs = debugBuildLiveReadMessagesFromFrame (frame, frameSize, useBodyOnlySysexData);
+
+        if (msgs.isEmpty())
+        {
+            juce::Logger::writeToLog ("[LM8101 self-test] failed to build LiveRead messages (bodyOnly="
+                                      + juce::String ((int) useBodyOnlySysexData) + ")");
+            return false;
+        }
+
+        if (! parseLm8101VcMinimalFromSysexMessages (msgs, parsedLive))
+        {
+            juce::Logger::writeToLog ("[LM8101 self-test] LiveRead glue parse failed (bodyOnly="
+                                      + juce::String ((int) useBodyOnlySysexData) + ")");
+            return false;
+        }
+
+        return debugSelfTestCompareLm8101VcMinimal (parsedFile, parsedLive);
+    }
+
+    /** Debug-only: compare direct frame parse vs LiveRead glue for LM 0040VC. Not for production. */
+    inline bool debugSelfTestLm0040VcParsePaths (const uint8* frame, int frameSize,
+                                                 bool useBodyOnlySysexData = false) noexcept
+    {
+        Lm0040VcMinimal parsedFile;
+        Lm0040VcMinimal parsedLive;
+
+        if (! parseLm0040VcMinimal (frame, frameSize, parsedFile))
+        {
+            juce::Logger::writeToLog ("[LM0040 self-test] direct parse failed (frameSize="
+                                      + juce::String (frameSize) + ")");
+            return false;
+        }
+
+        const auto msgs = debugBuildLiveReadMessagesFromFrame (frame, frameSize, useBodyOnlySysexData);
+
+        if (msgs.isEmpty())
+        {
+            juce::Logger::writeToLog ("[LM0040 self-test] failed to build LiveRead messages (bodyOnly="
+                                      + juce::String ((int) useBodyOnlySysexData) + ")");
+            return false;
+        }
+
+        if (! parseLm0040VcMinimalFromSysexMessages (msgs, parsedLive))
+        {
+            juce::Logger::writeToLog ("[LM0040 self-test] LiveRead glue parse failed (bodyOnly="
+                                      + juce::String ((int) useBodyOnlySysexData) + ")");
+            return false;
+        }
+
+        return debugSelfTestCompareLm0040VcMinimal (parsedFile, parsedLive);
+    }
+
+#endif
 }

@@ -1,5 +1,8 @@
 # YAMAHA SY99 — ПОЛНЫЙ СПРАВОЧНИК MIDI SysEx (из сервисного мануала)
 
+> **Bulk Dump Request/Response** (`F0 43 2n/0n 7A …`) — см. [`sy99_bulk_dump_request.md`](sy99_bulk_dump_request.md).  
+> Этот файл — только **parameter change** (`F0 43 1n 34 …`).
+
 ## Формат Parameter Change
 
 ```
@@ -104,10 +107,10 @@ F0 43 1n 34 GG T2 00 NN 0V VV F7
 | 06 | EVLH | 0-127 | Element Velocity Limit High |
 | 07 | PANNM | 0-31 | PAN data set table select |
 | 08 | MCTEN/OUTOSEL/OUT1SEL | bits | **Output Group** (UI) = MCTEN/OUTSEL (manual); legacy project name: Voice group. Bit-packed byte: MCTEN + OUTSEL. OUTSEL VV: off=`0x00`, G1=`0x02`, G2=`0x04`, both=`0x06`. E1..E4: `03 EE 00 08` with EE=`00`/`20`/`40`/`60`. |
-| 09 | - | - | (reserved) |
-| 0A | EFLN1EL | bits | Effect send lines 1-4 select |
-| 0B | EFSDLV | 0-127 | Effect send level |
-| 0C | EFSDVL | -7..+7 | Effect send velocity sense |
+| 09 | EFLN1EL | bits | Effect send line select El.1 (Send 1=`0x01`, Send 3=`0x04`; **Send 2/4 отсутствуют**) |
+| 0A | EFSDLV | 0-127 | Effect send level |
+| 0B | EFSDVSNS | -7..+7 | Effect send velocity sense (signed7 ladder) |
+| 0C | EFSDSCL | -7..+7 | Effect send scaling (signed7 ladder) |
 
 ---
 

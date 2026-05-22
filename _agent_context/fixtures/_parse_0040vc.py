@@ -17,6 +17,7 @@ FIX = Path(__file__).resolve().parent
 
 # Absolute offsets — only entries marked confirmed in lm_8101_offsets.md
 K_0040 = {
+    "EFMODE": 33,    # ✅ live 08 00 00 20; bulk 0040 @+33 (fixtures 06–08)
     "WPBR": 41,      # ✅ NN 0x28
     "ATPBR": 42,     # ⚠ candidate — sysex raw byte
     "PMRNG": 40,     # ⚠ candidate NN 0x2B
@@ -41,7 +42,7 @@ K_0040 = {
     "SPTPNT": 98,    # ✅ NN 0x43
 }
 
-CONFIRMED = {"WPBR", "WLLML", "SPTPNT"}
+CONFIRMED = {"EFMODE", "WPBR", "WLLML", "SPTPNT"}
 
 
 def find_frame(data: bytes, tag: str) -> bytes | None:

@@ -16,6 +16,7 @@
 #include "LiveSynthState.h"
 
 #include <cstdint>
+#include <functional>
 #include <vector>
 
 namespace YamahaLmVoiceDump
@@ -63,8 +64,32 @@ namespace Sy99ParamRegistry
         EFLN1EL,
         EFSDLV,
         EFSDVSNS,
+        EFSDSCL,
+        EFMODE,
         Count
     };
+
+    /** Send bit for El.1 effect send line (SY99 has Send 1 and Send 3 only). */
+    static constexpr uint8 kEffectSend1Bit = 0x01;
+    static constexpr uint8 kEffectSend3Bit = 0x04;
+
+    /** Whether a send line is enabled for UI given EFMODE raw (0=Off, 1=Serial, 2=Parallel). */
+    inline bool effectSendLineEnabled (int efmodeRaw, uint8 sendBit) noexcept
+    {
+        if (efmodeRaw < 0)
+            return false;
+
+        if (efmodeRaw == 0)
+            return false;
+
+        if (efmodeRaw == 1)
+            return sendBit == kEffectSend1Bit;
+
+        if (efmodeRaw == 2)
+            return sendBit == kEffectSend1Bit || sendBit == kEffectSend3Bit;
+
+        return false;
+    }
 
     struct ConfidenceFlags
     {
@@ -97,6 +122,122 @@ namespace Sy99ParamRegistry
         ConfidenceFlags confidence;
     };
 
+    /**
+        Одна строка чистого каталога params_meta.json (ParamCatalogEntry).
+        elementIndex < 0 — common или одна запись без per-element индекса.
+    */
+    struct ParamCatalogEntry
+    {
+        juce::String id;
+        juce::String groupId;
+        int          elementIndex = -1;
+        int          rawMin         = 0;
+        int          rawMax         = 127;
+        int          uiMin          = 0;
+        int          uiMax          = 127;
+        juce::String decode;  /** "identity" | "signed" | "enum" */
+        juce::String encode;
+        juce::String sysexTemplate;
+    };
+
+    /** Load params_meta.json catalog rows; truth / sy99Verification fields ignored. */
+    std::vector<ParamCatalogEntry> loadParamCatalogFromJsonFile (const juce::File& f);
+
+#if JUCE_DEBUG
+    /** Copy ui/fixtures/paramCatalog.json into params_meta.json when found (Debug only). */
+    void debugInstallCanonicalParamCatalogIfPresent() noexcept;
+
+    /** Compare compiled kMetaTable with params_meta.json (Debug builds only). */
+    void debugSelfTestParamCatalogConsistency() noexcept;
+
+    /** One [Sync authoritative] line per catalog Id (and per-element idx) after Sync from SY99. */
+    void debugLogAllCatalogParamsForSync (const LiveSynthState& s) noexcept;
+
+    /** [OUTSEL audit] one line: live/bulk8101/resolved (+ optional ui/baseline) for idx 0..3. */
+    void debugLogOutselAudit (const LiveSynthState& s, const char* stage, int elementIndex,
+                              int uiRaw = -1, int baselineRaw = -1) noexcept;
+
+    void debugLogOutselAuditAll (const LiveSynthState& s, const char* stage,
+                                 const int uiByIdx[4] = nullptr,
+                                 const int baselineByIdx[4] = nullptr) noexcept;
+
+    void debugLogOutselOverwrite (const char* writer, int idx, int oldVal, int newVal,
+                                  const char* stage) noexcept;
+
+    void debugLogOutselLiveDecode (uint8 b3, uint8 b4, uint8 b5, uint8 b6, uint8 b8) noexcept;
+
+    /** [ELDT audit] stage=ui|baseline — controlValue vs rawUsed/baselineRaw. */
+    void debugLogEldtAuditUi (const char* stage, int elementIndex, int controlValue,
+                              int rawUsed) noexcept;
+
+    void debugLogEldtOverwrite (const char* writer, int idx, int oldVal, int newVal,
+                                const char* stage) noexcept;
+
+    void debugWriteEldtSlot (int* slot, int value, const char* writer, int idx,
+                             const char* stage) noexcept;
+
+    /** [EFSEND audit] stage=ui — controlValue vs resolve rawUsed. */
+    void debugLogEfsendAuditUi (Id id, int elementIndex, int controlValue, int rawUsed) noexcept;
+
+    /** [EFSEND audit] stage=baseline — snapshot written to lm* / element* slots. */
+    void debugLogEfsendAuditBaseline (Id id, int elementIndex, int baselineRaw) noexcept;
+
+    /**
+        One compact [SYNC INSPECT] block for audited sync params (VNAM, OUTSEL, ELDT, EFSEND×4).
+        editorVnam: optional editName text; when null, falls back to live voiceName buffer.
+    */
+    void debugDumpAuditedSyncState (const LiveSynthState& s, int slot,
+                                    const char* editorVnam = nullptr) noexcept;
+
+    /**
+        Compact tracked-field snapshot + last-writer table. tag=StopSync captures golden bulk8101;
+        later tags compare and log [OVERWRITE REGRESS] when bulk values diverge.
+    */
+    void debugLogTrackedOverwriteSnapshot (const LiveSynthState& s, const char* tag) noexcept;
+
+    void debugWriteOutselSlot (int* slot, int value, const char* writer, int idx,
+                               const char* stage, const char* layer = "bulk8101") noexcept;
+
+    void debugWriteElvlSlot (int* slot, int value, const char* writer, int idx,
+                             const char* stage, const char* layer = "bulk8101") noexcept;
+
+    void debugWriteElnsSlot (int* slot, int value, const char* writer, int idx,
+                             const char* stage, const char* layer = "bulk8101") noexcept;
+
+    void debugWriteAuditCharWithStage (char* slot, int idx, char value, const char* writer,
+                                       const char* stage) noexcept;
+
+    void debugWriteAuditVnamBufferWithStage (char* dest, size_t destSize, const char* src,
+                                             size_t srcLen, const char* writer,
+                                             const char* stage) noexcept;
+
+    /** [WRITE audit] seq=<n> field=<tag> idx=<i> writer=<fn> stage=<…> old=<…> new=<…> */
+    void debugWriteAuditInt (int* slot, const char* field, int idx, int value,
+                             const char* writer, const char* stage = "?") noexcept;
+
+    void debugWriteAuditChar (char* slot, int idx, char value, const char* writer) noexcept;
+
+    void debugWriteAuditVnamBuffer (char* dest, size_t destSize, const char* src, size_t srcLen,
+                                    const char* writer) noexcept;
+
+    void debugWriteEfsendSlot (int* slot, Id id, int value, const char* writer, int idx,
+                               const char* stage) noexcept;
+
+    /** Log audited slot clears immediately before LiveSynthState::reset(). */
+    void debugAuditLiveStateReset (LiveSynthState& s) noexcept;
+
+    /** Log audited slot clears immediately before clearLiveParam9Overrides(). */
+    void debugAuditLiveStateClearParam9 (LiveSynthState& s) noexcept;
+
+    /** [UI binding audit] apply path: control display source during applyLiveSynthStateToEditor. */
+    void debugLogUiBindingAudit (const char* control, int elementIndex, const char* source,
+                                 Id id, int raw, int ui) noexcept;
+
+    /** [UI binding audit] write path: outbound edit destination from editor controls. */
+    void debugLogUiBindingAuditWrite (const char* control, int elementIndex, const char* dest,
+                                      Id id, int ui) noexcept;
+#endif
+
     struct RawRefs
     {
         int* live     = nullptr;
@@ -111,9 +252,21 @@ namespace Sy99ParamRegistry
     RawRefs refsFor (LiveSynthState& s, Id id, int elementIndex) noexcept;
     RawRefs refsFor (const LiveSynthState& s, Id id, int elementIndex) noexcept;
 
-    /** live > confirmed bulk8101 > confirmed bulk0040 (never candidate / packedConflict 0040). */
+    /** live > confirmed bulk8101 > confirmed bulk0040.
+        When hasParsedBulk8101/0040: dump slots win; canonicalRaw truth is not applied. */
     int resolveParam (const LiveSynthState& s, Id id, int elementIndex,
                       LiveSynthState::ParamSource& src) noexcept;
+
+    /** One-line resolve trace: underlying live/bulk slots vs resolveParam result. */
+    void debugLogResolvedParam (const LiveSynthState& s, Id id, int elementIndex,
+                                const char* label) noexcept;
+
+    /** Rebuild a ComboBox from active meta enumNames (item id = raw + 1). */
+    void fillEnumComboFromMeta (juce::ComboBox& combo, Id id,
+                                juce::NotificationType notify = juce::dontSendNotification) noexcept;
+
+    /** Fired after applyMetaPatch / persist (wire from MidiDemo → VoicePage). */
+    std::function<void()>& metaRegistryChangedCallback() noexcept;
 
     bool ingestLiveParameterFrame (LiveSynthState& s,
                                    uint8 b3, uint8 b4, uint8 b5, uint8 b6, uint8 b8) noexcept;
@@ -136,6 +289,9 @@ namespace Sy99ParamRegistry
     juce::String metaIdToString (Id id);
     juce::String codecFnToString (int (*fn) (int));
     juce::var metaToVar (const Meta& m);
+
+    /** Meta fields plus optional sy99Verification (per element) from params_meta.json. */
+    juce::var metaRecordToJsonVar (Id id);
 
     /** Parse enum id string, e.g. "ELMODE". Returns Id::Count if unknown. */
     Id idFromString (const juce::String& idStr);
@@ -191,5 +347,20 @@ namespace Sy99ParamRegistry
     /** Full ordered value map for API (rawMin..rawMax). */
     juce::var paramValueMapToJsonVar (Id id, int elementIndex,
                                       uint8 sysexDeviceByte = 0x10) noexcept;
+
+    /**
+        Parse SY99 observation log and compare with value map (registry + optional rowOverrides).
+        rowOverridesObject: { "rawStr": { sysexHex?, programLabel?, ui?, presentationKind? } }.
+    */
+    juce::var compareObservationLogToJsonVar (Id id, int elementIndex, uint8 sysexDeviceByte,
+                                              const juce::String& logText,
+                                              const juce::var& rowOverridesObject) noexcept;
+
+    /**
+        Re-send current resolved raw on the wire to open the SY99 editor page for this parameter
+        without intentionally changing the value. Returns false if no live value or MIDI unavailable.
+    */
+    bool focusSy99ParameterEditor (Id id, int elementIndex, uint8 sysexDeviceByte,
+                                   int rawOverride, juce::String& errorOut) noexcept;
 
 } // namespace Sy99ParamRegistry

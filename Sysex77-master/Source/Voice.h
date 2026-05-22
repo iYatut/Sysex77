@@ -112,17 +112,7 @@ struct VoicePage   : public Component, public Slider::Listener, public ComboBox:
         comboMode.setEditableText (false);
         comboMode.setJustificationType (Justification::centredBottom);
         comboMode.addListener(this);
-        comboMode.addItem("1 AFM MONO", 1);
-        comboMode.addItem("2 AFM MONO", 2);
-        comboMode.addItem("4 AFM MONO", 3);
-        comboMode.addItem("1 AFM POLY", 4);
-        comboMode.addItem("2 AFM POLY", 5);
-        comboMode.addItem("1 AWM POLY", 6);
-        comboMode.addItem("2 AWM POLY", 7);
-        comboMode.addItem("4 AWM POLY", 8);
-        comboMode.addItem("1 AFM & 1 AWM POLY", 9);
-        comboMode.addItem("2 AFM & 2 AWM POLY", 10);
-        comboMode.addItem("DRUM SET", 11);
+        Sy99ParamRegistry::fillEnumComboFromMeta (comboMode, Sy99ParamRegistry::Id::ELMODE);
         comboMode.setSelectedId(1);
 
         // ELMODE receive: listen to incoming SysEx; match address 02 00 00 00.
@@ -433,6 +423,9 @@ struct VoicePage   : public Component, public Slider::Listener, public ComboBox:
     }
     static int eldtUiFromResolved (int raw, LiveSynthState::ParamSource src) noexcept
     {
+        if (src == LiveSynthState::ParamSource::Bulk8101)
+            return juce::jlimit (-7, 7, raw);
+
         if (raw < 0)
             return -1;
 
@@ -452,6 +445,9 @@ struct VoicePage   : public Component, public Slider::Listener, public ComboBox:
 
     static int elnsUiFromResolved (int raw, LiveSynthState::ParamSource src) noexcept
     {
+        if (src == LiveSynthState::ParamSource::Bulk8101)
+            return juce::jlimit (-64, 63, raw);
+
         if (raw < 0)
             return -1;
 
@@ -491,7 +487,10 @@ struct VoicePage   : public Component, public Slider::Listener, public ComboBox:
     void applyResolvedSlider (MidiSlider& slider, const juce::Identifier& id, int uiValue,
                               juce::NotificationType notify = juce::dontSendNotification) noexcept
     {
-        if (uiValue < 0)
+        const int lo = (int) slider.getMinimum();
+        const int hi = (int) slider.getMaximum();
+
+        if (uiValue < lo || uiValue > hi)
             return;
 
         slider.setValue ((double) uiValue, notify);
@@ -582,32 +581,103 @@ struct VoicePage   : public Component, public Slider::Listener, public ComboBox:
             if (elvl < 0 || elvl > 127)
                 continue;
 
+#if JUCE_DEBUG
+            if (el.elIdx == 0)
+                Sy99ParamRegistry::debugWriteElvlSlot (&lm.lmElvlE1Raw, elvl,
+                                                       "commitEditorSessionToLiveSynthBaseline",
+                                                       0, "baseline", "bulk8101");
+            else
+                Sy99ParamRegistry::debugWriteElvlSlot (&lm.lmElvlRaw[(size_t) el.elIdx], elvl,
+                                                       "commitEditorSessionToLiveSynthBaseline",
+                                                       el.elIdx, "baseline", "bulk8101");
+            Sy99ParamRegistry::debugWriteElvlSlot (&lm.elementLevelRaw[(size_t) el.elIdx], elvl,
+                                                   "commitEditorSessionToLiveSynthBaseline",
+                                                   el.elIdx, "baseline", "live");
+#else
             if (el.elIdx == 0)
                 lm.lmElvlE1Raw = elvl;
             else
                 lm.lmElvlRaw[(size_t) el.elIdx] = elvl;
 
             lm.elementLevelRaw[(size_t) el.elIdx] = elvl;
+#endif
         }
 
         const int outselE1 = (int) sliderMixerEl1Outsel.getValue();
+#if JUCE_DEBUG
+        Sy99ParamRegistry::debugLogUiBindingAuditWrite ("sliderMixerEl1Outsel", 0,
+                                                        "ValueTree(ELEMENT1OUTSEL)+SysEx(03/00/08)+LiveSynthState",
+                                                        Sy99ParamRegistry::Id::OUTSEL, outselE1);
+        Sy99ParamRegistry::debugWriteOutselSlot (&lm.lmOutselE1Raw, (int) (outselE1 & 0x06),
+                                                 "commitEditorSessionToLiveSynthBaseline", 0,
+                                                 "baseline", "bulk8101");
+        Sy99ParamRegistry::debugWriteOutselSlot (&lm.elementOutselRaw[0], outselE1,
+                                                 "commitEditorSessionToLiveSynthBaseline", 0,
+                                                 "baseline", "live");
+#else
         lm.lmOutselE1Raw = (int) (outselE1 & 0x06);
         lm.elementOutselRaw[0] = outselE1;
+#endif
 
         const int outselE2 = (int) sliderMixerEl2Outsel.getValue();
+#if JUCE_DEBUG
+        Sy99ParamRegistry::debugLogUiBindingAuditWrite ("sliderMixerEl2Outsel", 1,
+                                                        "ValueTree(ELEMENT2OUTSEL)+SysEx(03/20/08)+LiveSynthState",
+                                                        Sy99ParamRegistry::Id::OUTSEL, outselE2);
+        Sy99ParamRegistry::debugWriteOutselSlot (&lm.lmOutselRaw[1], (int) (outselE2 & 0x06),
+                                                 "commitEditorSessionToLiveSynthBaseline", 1,
+                                                 "baseline", "bulk8101");
+        Sy99ParamRegistry::debugWriteOutselSlot (&lm.elementOutselRaw[1], outselE2,
+                                                 "commitEditorSessionToLiveSynthBaseline", 1,
+                                                 "baseline", "live");
+#else
         lm.lmOutselRaw[1] = (int) (outselE2 & 0x06);
         lm.elementOutselRaw[1] = outselE2;
+#endif
 
-        Element* elements[] = { &element1, &element2, &element3, &element4 };
+        MidiSlider* mixerDetuneSliders[] = {
+            &sliderMixerEl1Detune, &sliderMixerEl2Detune,
+            &sliderMixerEl3Detune, &sliderMixerEl4Detune,
+        };
+        MidiSlider* mixerNoteShiftSliders[] = {
+            &sliderMixerEl1NoteShift, &sliderMixerEl2NoteShift,
+            &sliderMixerEl3NoteShift, &sliderMixerEl4NoteShift,
+        };
 
         for (int e = 0; e < 4; ++e)
         {
-            const int eldt = (int) elements[e]->getDetuneSlider().getValue();
-            const int elns = (int) elements[e]->getNoteShiftSlider().getValue();
+            const int eldt = (int) mixerDetuneSliders[(size_t) e]->getValue();
+            const int elns = (int) mixerNoteShiftSliders[(size_t) e]->getValue();
+
+#if JUCE_DEBUG
+            Sy99ParamRegistry::debugLogUiBindingAuditWrite ("sliderMixerElDetune", e,
+                                                            "ValueTree(ELEMENTnFINE)+SysEx(03/NN/01)+LiveSynthState",
+                                                            Sy99ParamRegistry::Id::ELDT, eldt);
+            Sy99ParamRegistry::debugLogUiBindingAuditWrite ("sliderMixerElNoteShift", e,
+                                                            "ValueTree(ELEMENTnPITCH)+SysEx(03/NN/02)+LiveSynthState",
+                                                            Sy99ParamRegistry::Id::ELNS, elns);
+            juce::Logger::writeToLog ("[ELDT audit] stage=baseline idx=" + juce::String (e)
+                                      + " baselineRaw=" + juce::String (eldt));
+            Sy99ParamRegistry::debugWriteEldtSlot (&lm.lmEldtRaw[(size_t) e], eldt,
+                                                   "commitEditorSessionToLiveSynthBaseline", e, "baseline");
+            Sy99ParamRegistry::debugWriteEldtSlot (&lm.elementEldtRaw[(size_t) e], eldt,
+                                                   "commitEditorSessionToLiveSynthBaseline", e, "baseline");
+#else
             lm.lmEldtRaw[(size_t) e] = eldt;
-            lm.lmElnsRaw[(size_t) e] = elns;
             lm.elementEldtRaw[(size_t) e] = eldt;
+#endif
+
+#if JUCE_DEBUG
+            Sy99ParamRegistry::debugWriteElnsSlot (&lm.lmElnsRaw[(size_t) e], elns,
+                                                   "commitEditorSessionToLiveSynthBaseline", e,
+                                                   "baseline", "bulk8101");
+            Sy99ParamRegistry::debugWriteElnsSlot (&lm.elementElnsRaw[(size_t) e], elns,
+                                                   "commitEditorSessionToLiveSynthBaseline", e,
+                                                   "baseline", "live");
+#else
+            lm.lmElnsRaw[(size_t) e] = elns;
             lm.elementElnsRaw[(size_t) e] = elns;
+#endif
         }
 
         MidiSlider* noteLimitLow[] = {
@@ -640,12 +710,66 @@ struct VoicePage   : public Component, public Slider::Listener, public ComboBox:
         lm.lmEvllRaw[1] = lm.elementEvllRaw[1];
         lm.lmEvlhRaw[1] = lm.elementEvlhRaw[1];
 
+        lm.lm0040EfmodeRaw = (int) sliderEfmode.getValue();
+#if JUCE_DEBUG
+        Sy99ParamRegistry::debugLogUiBindingAuditWrite ("sliderMixerEl1Efsendsel", 0,
+                                                        "ValueTree(ELEMENT1EFSENDSEL)+SysEx(03/00/09)+LiveSynthState",
+                                                        Sy99ParamRegistry::Id::EFLN1EL,
+                                                        (int) sliderMixerEl1Efsendsel.getValue());
+        Sy99ParamRegistry::debugLogUiBindingAuditWrite ("sliderMixerEl1Efsendlvl", 0,
+                                                        "ValueTree(ELEMENT1EFSENDLVL)+SysEx(03/00/0A)+LiveSynthState",
+                                                        Sy99ParamRegistry::Id::EFSDLV,
+                                                        (int) sliderMixerEl1Efsendlvl.getValue());
+        Sy99ParamRegistry::debugLogUiBindingAuditWrite ("sliderMixerEl1Efsendvsns", 0,
+                                                        "ValueTree(ELEMENT1EFSENDVSNS)+SysEx(03/00/0B)+LiveSynthState",
+                                                        Sy99ParamRegistry::Id::EFSDVSNS,
+                                                        (int) sliderMixerEl1Efsendvsns.getValue());
+        Sy99ParamRegistry::debugLogUiBindingAuditWrite ("sliderMixerEl1Efsendscl", 0,
+                                                        "ValueTree(ELEMENT1EFSENDSCL)+SysEx(03/00/0C)+LiveSynthState",
+                                                        Sy99ParamRegistry::Id::EFSDSCL,
+                                                        (int) sliderMixerEl1Efsendscl.getValue());
+        Sy99ParamRegistry::debugWriteEfsendSlot (&lm.lmEfln1ElRaw, Sy99ParamRegistry::Id::EFLN1EL,
+                                                 (int) sliderMixerEl1Efsendsel.getValue(),
+                                                 "commitEditorSessionToLiveSynthBaseline", 0, "baseline");
+        Sy99ParamRegistry::debugWriteEfsendSlot (&lm.lmEfsdlvRaw, Sy99ParamRegistry::Id::EFSDLV,
+                                                 (int) sliderMixerEl1Efsendlvl.getValue(),
+                                                 "commitEditorSessionToLiveSynthBaseline", 0, "baseline");
+        Sy99ParamRegistry::debugWriteEfsendSlot (&lm.lmEfsdvlRaw, Sy99ParamRegistry::Id::EFSDVSNS,
+                                                 (int) sliderMixerEl1Efsendvsns.getValue(),
+                                                 "commitEditorSessionToLiveSynthBaseline", 0, "baseline");
+        Sy99ParamRegistry::debugWriteEfsendSlot (&lm.lmEfsdsclRaw, Sy99ParamRegistry::Id::EFSDSCL,
+                                                 (int) sliderMixerEl1Efsendscl.getValue(),
+                                                 "commitEditorSessionToLiveSynthBaseline", 0, "baseline");
+        Sy99ParamRegistry::debugWriteEfsendSlot (&lm.elementEfsendselRaw[0],
+                                                 Sy99ParamRegistry::Id::EFLN1EL, lm.lmEfln1ElRaw,
+                                                 "commitEditorSessionToLiveSynthBaseline", 0, "baseline");
+        Sy99ParamRegistry::debugWriteEfsendSlot (&lm.elementEfsendlvlRaw[0],
+                                                 Sy99ParamRegistry::Id::EFSDLV, lm.lmEfsdlvRaw,
+                                                 "commitEditorSessionToLiveSynthBaseline", 0, "baseline");
+        Sy99ParamRegistry::debugWriteEfsendSlot (&lm.elementEfsdvsnsRaw[0],
+                                                 Sy99ParamRegistry::Id::EFSDVSNS, lm.lmEfsdvlRaw,
+                                                 "commitEditorSessionToLiveSynthBaseline", 0, "baseline");
+        Sy99ParamRegistry::debugWriteEfsendSlot (&lm.elementEfsdsclRaw[0],
+                                                 Sy99ParamRegistry::Id::EFSDSCL, lm.lmEfsdsclRaw,
+                                                 "commitEditorSessionToLiveSynthBaseline", 0, "baseline");
+#else
         lm.lmEfln1ElRaw = (int) sliderMixerEl1Efsendsel.getValue();
         lm.lmEfsdlvRaw = (int) sliderMixerEl1Efsendlvl.getValue();
         lm.lmEfsdvlRaw = (int) sliderMixerEl1Efsendvsns.getValue();
+        lm.lmEfsdsclRaw = (int) sliderMixerEl1Efsendscl.getValue();
         lm.elementEfsendselRaw[0] = lm.lmEfln1ElRaw;
         lm.elementEfsendlvlRaw[0] = lm.lmEfsdlvRaw;
         lm.elementEfsdvsnsRaw[0] = lm.lmEfsdvlRaw;
+        lm.elementEfsdsclRaw[0] = lm.lmEfsdsclRaw;
+#endif
+        lm.efmodeRaw = lm.lm0040EfmodeRaw;
+
+#if JUCE_DEBUG
+        Sy99ParamRegistry::debugLogEfsendAuditBaseline (Sy99ParamRegistry::Id::EFLN1EL, 0, lm.lmEfln1ElRaw);
+        Sy99ParamRegistry::debugLogEfsendAuditBaseline (Sy99ParamRegistry::Id::EFSDLV, 0, lm.lmEfsdlvRaw);
+        Sy99ParamRegistry::debugLogEfsendAuditBaseline (Sy99ParamRegistry::Id::EFSDVSNS, 0, lm.lmEfsdvlRaw);
+        Sy99ParamRegistry::debugLogEfsendAuditBaseline (Sy99ParamRegistry::Id::EFSDSCL, 0, lm.lmEfsdsclRaw);
+#endif
 
         for (auto id : Sy99ParamRegistry::kCommonDirectSliderIds)
         {
@@ -671,13 +795,40 @@ struct VoicePage   : public Component, public Slider::Listener, public ComboBox:
         for (int i = 0; i < 10; ++i)
         {
             const char c = (char) (i < len ? (data[i] & 0x7f) : 0x20);
+#if JUCE_DEBUG
+            Sy99ParamRegistry::debugWriteAuditCharWithStage (&lm.lmVoiceName[i], i, c,
+                                                             "commitEditorSessionToLiveSynthBaseline",
+                                                             "baseline");
+            Sy99ParamRegistry::debugWriteAuditCharWithStage (&voiceNameBuffer[i], i, c,
+                                                             "commitEditorSessionToLiveSynthBaseline",
+                                                             "baseline");
+#else
             lm.lmVoiceName[i] = c;
             voiceNameBuffer[i] = c;
+#endif
         }
 
         lm.lmVoiceName[10] = '\0';
 
+#if JUCE_DEBUG
+        {
+            const int baselineByIdx[4] = {
+                (int) (outselE1 & 0x06),
+                (int) (outselE2 & 0x06),
+                -1,
+                -1,
+            };
+            Sy99ParamRegistry::debugLogOutselAuditAll (lm, "baseline-commit", nullptr, baselineByIdx);
+        }
+#endif
+
         logCommittedBaselineSnapshot();
+
+#if JUCE_DEBUG
+        Sy99ParamRegistry::debugDumpAuditedSyncState (lm, bankSelectedVoiceIndex,
+                                                      editName.getText().toRawUTF8());
+        Sy99ParamRegistry::debugLogTrackedOverwriteSnapshot (lm, "AfterBaseline");
+#endif
     }
 
     void logCommittedBaselineSnapshot() const noexcept
@@ -719,6 +870,7 @@ struct VoicePage   : public Component, public Slider::Listener, public ComboBox:
         LiveSynthState::ParamSource src = LiveSynthState::ParamSource::None;
         int elmodeResolved = Sy99ParamRegistry::resolveParam (lm, Sy99ParamRegistry::Id::ELMODE, 0, src);
         int wolResolved = Sy99ParamRegistry::resolveParam (lm, Sy99ParamRegistry::Id::WOL, 0, src);
+        Sy99ParamRegistry::debugLogResolvedParam (lm, Sy99ParamRegistry::Id::WOL, 0, "WOL");
 
         Logger::writeToLog ("[SyncFromSY99] apply diag: has8101=" + String ((int) lm.hasParsedBulk8101)
                             + " has0040=" + String ((int) lm.hasParsedBulk0040)
@@ -747,6 +899,8 @@ struct VoicePage   : public Component, public Slider::Listener, public ComboBox:
             receivingVNAM = false;
         }
 
+        refreshEnumCombosFromMetaRegistry();
+
         if (elmodeResolved >= 0 && elmodeResolved <= 10)
         {
             comboMode.setSelectedId (elmodeResolved + 1, juce::dontSendNotification);
@@ -766,6 +920,8 @@ struct VoicePage   : public Component, public Slider::Listener, public ComboBox:
         {
             LiveSynthState::ParamSource rowSrc = LiveSynthState::ParamSource::None;
             const int resolved = Sy99ParamRegistry::resolveParam (lm, id, 0, rowSrc);
+            if (id == Sy99ParamRegistry::Id::WPBR)
+                Sy99ParamRegistry::debugLogResolvedParam (lm, id, 0, "WPBR");
 
             if (resolved < 0)
                 continue;
@@ -831,6 +987,8 @@ struct VoicePage   : public Component, public Slider::Listener, public ComboBox:
             LiveSynthState::ParamSource rowSrc = LiveSynthState::ParamSource::None;
             const int elvlRaw = Sy99ParamRegistry::resolveParam (lm, Sy99ParamRegistry::Id::ELVL,
                                                                  el.elementIndex, rowSrc);
+            if (el.elementIndex == 0)
+                Sy99ParamRegistry::debugLogResolvedParam (lm, Sy99ParamRegistry::Id::ELVL, 0, "ELVL1");
 
             if (elvlRaw < 0 || elvlRaw > 127 || el.slider == nullptr)
                 continue;
@@ -842,16 +1000,40 @@ struct VoicePage   : public Component, public Slider::Listener, public ComboBox:
 
         juce::String outselLog;
 
+#if JUCE_DEBUG
+        int outselUiByIdx[4] = { -1, -1, -1, -1 };
+#endif
+
         {
             LiveSynthState::ParamSource outselSrc = LiveSynthState::ParamSource::None;
             int outselE1 = Sy99ParamRegistry::resolveParam (lm, Sy99ParamRegistry::Id::OUTSEL, 0, outselSrc);
+            Sy99ParamRegistry::debugLogResolvedParam (lm, Sy99ParamRegistry::Id::OUTSEL, 0, "OUTSEL1");
 
             if (outselE1 >= 0)
             {
                 const uint8 current = (uint8) (int) sliderMixerEl1Outsel.getValue();
                 const uint8 merged = (uint8) ((current & ~0x06) | ((uint8) outselE1 & 0x06));
-                sliderMixerEl1Outsel.setValue ((double) merged, juce::sendNotification);
+#if JUCE_DEBUG
+                Sy99ParamRegistry::debugLogUiBindingAudit ("sliderMixerEl1Outsel", 0, "resolveParam",
+                                                             Sy99ParamRegistry::Id::OUTSEL,
+                                                             outselE1, (int) (outselE1 & 0x06));
+                if ((current & (uint8) ~0x06) != 0)
+                    Sy99ParamRegistry::debugLogUiBindingAudit ("sliderMixerEl1Outsel", 0, "directState",
+                                                               Sy99ParamRegistry::Id::OUTSEL,
+                                                               (int) (current & ~0x06),
+                                                               (int) (merged & ~0x06));
+                Sy99ParamRegistry::debugLogUiBindingAudit ("mixerEl1OutputGroup", 0,
+                                                            (current & (uint8) ~0x06) != 0
+                                                                ? "resolveParam+directState"
+                                                                : "resolveParam",
+                                                            Sy99ParamRegistry::Id::OUTSEL,
+                                                            outselE1, (int) (merged & 0x06));
+#endif
+                sliderMixerEl1Outsel.setValue ((double) merged, juce::dontSendNotification);
                 outselLog = " OUTSEL_E1=0x" + String::toHexString ((int) (merged & 0x06)).toUpperCase();
+#if JUCE_DEBUG
+                outselUiByIdx[0] = (int) (merged & 0x06);
+#endif
             }
         }
 
@@ -860,8 +1042,43 @@ struct VoicePage   : public Component, public Slider::Listener, public ComboBox:
             const int outselE2 = Sy99ParamRegistry::resolveParam (lm, Sy99ParamRegistry::Id::OUTSEL, 1, outselSrc);
 
             if (outselE2 >= 0)
-                sliderMixerEl2Outsel.setValue ((double) outselE2, juce::sendNotification);
+            {
+#if JUCE_DEBUG
+                Sy99ParamRegistry::debugLogUiBindingAudit ("sliderMixerEl2Outsel", 1, "resolveParam",
+                                                           Sy99ParamRegistry::Id::OUTSEL,
+                                                           outselE2, outselE2);
+                Sy99ParamRegistry::debugLogUiBindingAudit ("mixerEl2OutputGroup", 1, "resolveParam",
+                                                           Sy99ParamRegistry::Id::OUTSEL,
+                                                           outselE2, outselE2);
+#endif
+                sliderMixerEl2Outsel.setValue ((double) outselE2, juce::dontSendNotification);
+#if JUCE_DEBUG
+                outselUiByIdx[1] = (int) (outselE2 & 0x06);
+#endif
+            }
         }
+
+#if JUCE_DEBUG
+        for (int e = 2; e < 4; ++e)
+        {
+            LiveSynthState::ParamSource rowSrc = LiveSynthState::ParamSource::None;
+            const int resolved = Sy99ParamRegistry::resolveParam (lm, Sy99ParamRegistry::Id::OUTSEL, e, rowSrc);
+            if (resolved >= 0)
+                Sy99ParamRegistry::debugLogUiBindingAudit ("(no mixer UI control)", e, "other",
+                                                           Sy99ParamRegistry::Id::OUTSEL,
+                                                           resolved, -1);
+        }
+#endif
+
+#if JUCE_DEBUG
+        for (int e = 0; e < 4; ++e)
+        {
+            LiveSynthState::ParamSource rowSrc = LiveSynthState::ParamSource::None;
+            const int resolved = Sy99ParamRegistry::resolveParam (lm, Sy99ParamRegistry::Id::OUTSEL, e, rowSrc);
+            Sy99ParamRegistry::debugLogOutselAudit (lm, "ui-apply", e, outselUiByIdx[e], -1);
+            juce::ignoreUnused (resolved);
+        }
+#endif
 
         Element* elements[] = { &element1, &element2, &element3, &element4 };
         const juce::Identifier fineIds[] = {
@@ -869,6 +1086,14 @@ struct VoicePage   : public Component, public Slider::Listener, public ComboBox:
         };
         const juce::Identifier pitchIds[] = {
             IDs::ELEMENT1PITCH, IDs::ELEMENT2PITCH, IDs::ELEMENT3PITCH, IDs::ELEMENT4PITCH,
+        };
+        MidiSlider* mixerDetuneSliders[] = {
+            &sliderMixerEl1Detune, &sliderMixerEl2Detune,
+            &sliderMixerEl3Detune, &sliderMixerEl4Detune,
+        };
+        MidiSlider* mixerNoteShiftSliders[] = {
+            &sliderMixerEl1NoteShift, &sliderMixerEl2NoteShift,
+            &sliderMixerEl3NoteShift, &sliderMixerEl4NoteShift,
         };
 
         juce::String pitchLog;
@@ -878,23 +1103,48 @@ struct VoicePage   : public Component, public Slider::Listener, public ComboBox:
             LiveSynthState::ParamSource rowSrc = LiveSynthState::ParamSource::None;
             const int eldtResolved = Sy99ParamRegistry::resolveParam (lm, Sy99ParamRegistry::Id::ELDT, e, rowSrc);
 
-            if (eldtResolved >= 0)
+            if (rowSrc != LiveSynthState::ParamSource::None)
             {
                 const int eldtUi = eldtUiFromResolved (eldtResolved, rowSrc);
-                applyResolvedSlider (elements[e]->getDetuneSlider(), fineIds[(size_t) e], eldtUi);
+#if JUCE_DEBUG
+                Sy99ParamRegistry::debugLogUiBindingAudit ("sliderMixerElDetune", e, "resolveParam",
+                                                           Sy99ParamRegistry::Id::ELDT,
+                                                           eldtResolved, eldtUi);
+#endif
+                applyResolvedSlider (*mixerDetuneSliders[(size_t) e], fineIds[(size_t) e], eldtUi);
                 pitchLog << " ELDT_E" << (e + 1) << "=" << eldtUi;
             }
 
             rowSrc = LiveSynthState::ParamSource::None;
             const int elnsResolved = Sy99ParamRegistry::resolveParam (lm, Sy99ParamRegistry::Id::ELNS, e, rowSrc);
+            if (e == 0)
+                Sy99ParamRegistry::debugLogResolvedParam (lm, Sy99ParamRegistry::Id::ELNS, 0, "ELNS1");
 
-            if (elnsResolved >= 0)
+            if (rowSrc != LiveSynthState::ParamSource::None)
             {
                 const int elnsUi = elnsUiFromResolved (elnsResolved, rowSrc);
-                applyResolvedSlider (elements[e]->getNoteShiftSlider(), pitchIds[(size_t) e], elnsUi);
+#if JUCE_DEBUG
+                Sy99ParamRegistry::debugLogUiBindingAudit ("sliderMixerElNoteShift", e, "resolveParam",
+                                                           Sy99ParamRegistry::Id::ELNS,
+                                                           elnsResolved, elnsUi);
+#endif
+                applyResolvedSlider (*mixerNoteShiftSliders[(size_t) e], pitchIds[(size_t) e], elnsUi);
                 pitchLog << " ELNS_E" << (e + 1) << "=" << elnsUi;
             }
         }
+
+#if JUCE_DEBUG
+        for (int e = 0; e < 4; ++e)
+        {
+            juce::Logger::writeToLog ("[MIXER ROW audit] stage=postApply idx=" + juce::String (e)
+                                      + " mixerDetune=" + juce::String ((int) mixerDetuneSliders[(size_t) e]->getValue())
+                                      + " mixerNoteShift=" + juce::String ((int) mixerNoteShiftSliders[(size_t) e]->getValue())
+                                      + " pitchDetune=" + juce::String ((int) elements[e]->getDetuneSlider().getValue())
+                                      + " pitchNoteShift=" + juce::String ((int) elements[e]->getNoteShiftSlider().getValue())
+                                      + " vtFine=" + juce::String ((int) valueTreeVoice.getProperty (fineIds[(size_t) e]))
+                                      + " vtPitch=" + juce::String ((int) valueTreeVoice.getProperty (pitchIds[(size_t) e])));
+        }
+#endif
 
         MidiSlider* noteLimitLow[] = {
             &sliderMixerEl1NoteLimitLow, &sliderMixerEl2NoteLimitLow,
@@ -966,16 +1216,47 @@ struct VoicePage   : public Component, public Slider::Listener, public ComboBox:
 
         {
             LiveSynthState::ParamSource rowSrc = LiveSynthState::ParamSource::None;
+            const int efmode = Sy99ParamRegistry::resolveParam (lm, Sy99ParamRegistry::Id::EFMODE, 0, rowSrc);
+            Sy99ParamRegistry::debugLogResolvedParam (lm, Sy99ParamRegistry::Id::EFMODE, 0, "EFMODE");
+
+            if (efmode >= 0)
+                applyResolvedSlider (sliderEfmode, IDs::EFMODE, efmode);
+
+            rowSrc = LiveSynthState::ParamSource::None;
             const int efln = Sy99ParamRegistry::resolveParam (lm, Sy99ParamRegistry::Id::EFLN1EL, 0, rowSrc);
 
             if (efln >= 0)
+            {
+#if JUCE_DEBUG
+                Sy99ParamRegistry::debugLogUiBindingAudit ("sliderMixerEl1Efsendsel", 0, "resolveParam",
+                                                           Sy99ParamRegistry::Id::EFLN1EL, efln, efln);
+                Sy99ParamRegistry::debugLogUiBindingAudit ("mixerEl1EffectSendSelect", 0, "resolveParam",
+                                                           Sy99ParamRegistry::Id::EFLN1EL, efln, efln);
+#endif
                 applyResolvedSlider (sliderMixerEl1Efsendsel, IDs::ELEMENT1EFSENDSEL, efln);
+            }
+
+#if JUCE_DEBUG
+            Sy99ParamRegistry::debugLogEfsendAuditUi (Sy99ParamRegistry::Id::EFLN1EL, 0,
+                                                    (int) sliderMixerEl1Efsendsel.getValue(), efln);
+#endif
 
             rowSrc = LiveSynthState::ParamSource::None;
             const int efsdlv = Sy99ParamRegistry::resolveParam (lm, Sy99ParamRegistry::Id::EFSDLV, 0, rowSrc);
 
             if (efsdlv >= 0)
+            {
+#if JUCE_DEBUG
+                Sy99ParamRegistry::debugLogUiBindingAudit ("sliderMixerEl1Efsendlvl", 0, "resolveParam",
+                                                           Sy99ParamRegistry::Id::EFSDLV, efsdlv, efsdlv);
+#endif
                 applyResolvedSlider (sliderMixerEl1Efsendlvl, IDs::ELEMENT1EFSENDLVL, efsdlv);
+            }
+
+#if JUCE_DEBUG
+            Sy99ParamRegistry::debugLogEfsendAuditUi (Sy99ParamRegistry::Id::EFSDLV, 0,
+                                                    (int) sliderMixerEl1Efsendlvl.getValue(), efsdlv);
+#endif
 
             rowSrc = LiveSynthState::ParamSource::None;
             const int efsdvl = Sy99ParamRegistry::resolveParam (lm, Sy99ParamRegistry::Id::EFSDVSNS, 0, rowSrc);
@@ -983,8 +1264,37 @@ struct VoicePage   : public Component, public Slider::Listener, public ComboBox:
             if (efsdvl >= 0)
             {
                 const int efsdUi = efsdvsnsUiFromResolved (efsdvl, rowSrc);
+#if JUCE_DEBUG
+                Sy99ParamRegistry::debugLogUiBindingAudit ("sliderMixerEl1Efsendvsns", 0, "resolveParam",
+                                                           Sy99ParamRegistry::Id::EFSDVSNS,
+                                                           efsdvl, efsdUi);
+#endif
                 applyResolvedSlider (sliderMixerEl1Efsendvsns, IDs::ELEMENT1EFSENDVSNS, efsdUi);
             }
+
+#if JUCE_DEBUG
+            Sy99ParamRegistry::debugLogEfsendAuditUi (Sy99ParamRegistry::Id::EFSDVSNS, 0,
+                                                    (int) sliderMixerEl1Efsendvsns.getValue(), efsdvl);
+#endif
+
+            rowSrc = LiveSynthState::ParamSource::None;
+            const int efsdscl = Sy99ParamRegistry::resolveParam (lm, Sy99ParamRegistry::Id::EFSDSCL, 0, rowSrc);
+
+            if (efsdscl >= 0)
+            {
+                const int sclUi = efsdvsnsUiFromResolved (efsdscl, rowSrc);
+#if JUCE_DEBUG
+                Sy99ParamRegistry::debugLogUiBindingAudit ("sliderMixerEl1Efsendscl", 0, "resolveParam",
+                                                           Sy99ParamRegistry::Id::EFSDSCL,
+                                                           efsdscl, sclUi);
+#endif
+                applyResolvedSlider (sliderMixerEl1Efsendscl, IDs::ELEMENT1EFSENDSCL, sclUi);
+            }
+
+#if JUCE_DEBUG
+            Sy99ParamRegistry::debugLogEfsendAuditUi (Sy99ParamRegistry::Id::EFSDSCL, 0,
+                                                    (int) sliderMixerEl1Efsendscl.getValue(), efsdscl);
+#endif
         }
 
         Logger::writeToLog ("[SyncFromSY99] applyLiveSynthStateToEditor done: name=\""
@@ -998,7 +1308,26 @@ struct VoicePage   : public Component, public Slider::Listener, public ComboBox:
                             + limitsLog
                             + " (editor only — move controls or SEND VOICE for SY99)");
 
+#if JUCE_DEBUG
+        Sy99ParamRegistry::debugLogAllCatalogParamsForSync (lm);
+        Sy99ParamRegistry::debugDumpAuditedSyncState (lm, bankSelectedVoiceIndex,
+                                                      editName.getText().toRawUTF8());
+        Sy99ParamRegistry::debugLogTrackedOverwriteSnapshot (lm, "AfterApply");
+#endif
+
+        if (auto& refresh = refreshMixerBoundControlsCallback(); refresh != nullptr)
+            refresh();
+
+        if (auto& relayout = syncCommonMixerLayoutCallback(); relayout != nullptr)
+            relayout();
+
         return true;
+    }
+
+    /** Combo labels from params_meta.json enumNames (CMS). */
+    void refreshEnumCombosFromMetaRegistry() noexcept
+    {
+        Sy99ParamRegistry::fillEnumComboFromMeta (comboMode, Sy99ParamRegistry::Id::ELMODE);
     }
 
     /** Element tabs / op layout for ELMODE raw 0…10 (matches combo item index). No MIDI out. */
@@ -1090,12 +1419,29 @@ struct VoicePage   : public Component, public Slider::Listener, public ComboBox:
 
             toggleLiveVoiceReadFromSy99();
 
-            if (stopping && applyLiveSynthStateToEditor())
+            if (stopping)
             {
-                commitEditorSessionToLiveSynthBaseline();
-                Logger::writeToLog ("[SyncFromSY99] clearEditorPatchDirty slot="
-                                    + String (bankSelectedVoiceIndex));
-                clearEditorPatchDirty();
+#if JUCE_DEBUG
+                Sy99ParamRegistry::debugLogTrackedOverwriteSnapshot (getLiveSynthState(), "StopSync");
+#endif
+                EditorPatchDirtySuppressGuard suppressDirtyMark;
+
+                if (applyLiveSynthStateToEditor())
+                {
+                    commitEditorSessionToLiveSynthBaseline();
+                    editorSyncBaselineGracePeriod() = true;
+                    clearEditorPatchDirty();
+                    Logger::writeToLog ("[SyncFromSY99] clearEditorPatchDirty slot="
+                                        + String (bankSelectedVoiceIndex));
+
+                    juce::MessageManager::callAsync ([]
+                    {
+                        suppressEditorPatchDirtyMark() = true;
+                        clearEditorPatchDirty();
+                        suppressEditorPatchDirtyMark() = false;
+                        editorSyncBaselineGracePeriod() = false;
+                    });
+                }
             }
 
             btReadVoiceFromSy99.setButtonText (stopping ? TRANS ("Sync from SY99")
@@ -1194,7 +1540,7 @@ void setNombreElements (int nombre)
         element4.setVisible(true);
         }
         
-        Logger::writeToLog("setNombre elements");
+        Logger::writeToLog("setNombre elements count=" + String (nombre));
         resized();
         sendChangeMessage();
     }
@@ -1441,6 +1787,14 @@ void setNombreElements (int nombre)
     MidiSlider  sliderMixerEl2VelocityLimitHigh;
     MidiSlider  sliderMixerEl3VelocityLimitHigh;
     MidiSlider  sliderMixerEl4VelocityLimitHigh;
+    MidiSlider  sliderMixerEl1Detune;
+    MidiSlider  sliderMixerEl2Detune;
+    MidiSlider  sliderMixerEl3Detune;
+    MidiSlider  sliderMixerEl4Detune;
+    MidiSlider  sliderMixerEl1NoteShift;
+    MidiSlider  sliderMixerEl2NoteShift;
+    MidiSlider  sliderMixerEl3NoteShift;
+    MidiSlider  sliderMixerEl4NoteShift;
 
     bool isEditorPatchDirtySlider (Slider* slider) noexcept
     {
@@ -1462,7 +1816,11 @@ void setNombreElements (int nombre)
             || slider == &sliderMixerEl1VelocityLimitLow || slider == &sliderMixerEl2VelocityLimitLow
             || slider == &sliderMixerEl3VelocityLimitLow || slider == &sliderMixerEl4VelocityLimitLow
             || slider == &sliderMixerEl1VelocityLimitHigh || slider == &sliderMixerEl2VelocityLimitHigh
-            || slider == &sliderMixerEl3VelocityLimitHigh || slider == &sliderMixerEl4VelocityLimitHigh)
+            || slider == &sliderMixerEl3VelocityLimitHigh || slider == &sliderMixerEl4VelocityLimitHigh
+            || slider == &sliderMixerEl1Detune || slider == &sliderMixerEl2Detune
+            || slider == &sliderMixerEl3Detune || slider == &sliderMixerEl4Detune
+            || slider == &sliderMixerEl1NoteShift || slider == &sliderMixerEl2NoteShift
+            || slider == &sliderMixerEl3NoteShift || slider == &sliderMixerEl4NoteShift)
             return true;
 
         return slider == &element1.getDetuneSlider()
@@ -1508,6 +1866,10 @@ void setNombreElements (int nombre)
             &sliderMixerEl3VelocityLimitLow, &sliderMixerEl4VelocityLimitLow,
             &sliderMixerEl1VelocityLimitHigh, &sliderMixerEl2VelocityLimitHigh,
             &sliderMixerEl3VelocityLimitHigh, &sliderMixerEl4VelocityLimitHigh,
+            &sliderMixerEl1Detune, &sliderMixerEl2Detune,
+            &sliderMixerEl3Detune, &sliderMixerEl4Detune,
+            &sliderMixerEl1NoteShift, &sliderMixerEl2NoteShift,
+            &sliderMixerEl3NoteShift, &sliderMixerEl4NoteShift,
         };
 
         for (auto* s : sliders)
@@ -1548,6 +1910,10 @@ void setNombreElements (int nombre)
             &sliderMixerEl3VelocityLimitLow, &sliderMixerEl4VelocityLimitLow,
             &sliderMixerEl1VelocityLimitHigh, &sliderMixerEl2VelocityLimitHigh,
             &sliderMixerEl3VelocityLimitHigh, &sliderMixerEl4VelocityLimitHigh,
+            &sliderMixerEl1Detune, &sliderMixerEl2Detune,
+            &sliderMixerEl3Detune, &sliderMixerEl4Detune,
+            &sliderMixerEl1NoteShift, &sliderMixerEl2NoteShift,
+            &sliderMixerEl3NoteShift, &sliderMixerEl4NoteShift,
         };
 
         for (auto* s : sliders)
@@ -1633,7 +1999,7 @@ void setNombreElements (int nombre)
         setupCommonParam (sliderEGBRNG, labEGBRNG, 0x37,   0, 127);
         setupCommonAssign (comboWLASN,  labWLASN,  0x38,   0, 121);
         setupCommonParam (sliderWLLML,  labWLLML,  0x39,   0, 127);
-        setupCommonParam (sliderMCTUN,  labMCTUN,  0x3A,   0,  65);
+        setupCommonParam (sliderMCTUN,  labMCTUN,  0x3A,   0, 127);
         setupCommonParam (sliderRNDP,   labRNDP,   0x3B,   0,   7);
         setupAFTMD();
         setupCommonParam (sliderSPTPNT, labSPTPNT, 0x43,   0, 127);
@@ -1708,6 +2074,36 @@ void setNombreElements (int nombre)
         slider.getValueObject().referTo (valueElVelocityLimitHigh);
     }
 
+    void setupMixerElDetune (MidiSlider& slider, uint8 elementOffset, const Identifier& fineId)
+    {
+        int sysex[9] = { 0x43, sysexEngine, 0x34, 0x03, elementOffset, 0x00, 0x01, 0x00, 0x00 };
+        slider.setMidiSysex (sysex);
+        slider.setRangeAndRound (-7, 7, 0);
+        slider.setSliderStyle (Slider::LinearHorizontal);
+        slider.setTextBoxStyle (Slider::TextBoxRight, false, 36, 16);
+        slider.setLookAndFeel (nullptr);
+        slider.setNumDecimalPlacesToDisplay (0);
+        slider.setDoubleClickReturnValue (true, 0);
+
+        Value valueElFine = valueTreeVoice.getPropertyAsValue (fineId.toString(), &undoManager);
+        slider.getValueObject().referTo (valueElFine);
+    }
+
+    void setupMixerElNoteShift (MidiSlider& slider, uint8 elementOffset, const Identifier& pitchId)
+    {
+        int sysex[9] = { 0x43, sysexEngine, 0x34, 0x03, elementOffset, 0x00, 0x02, 0x00, 0x00 };
+        slider.setMidiSysex (sysex);
+        slider.setElementNoteShiftSignedSysexEncode (true);
+        slider.setRange (-64, 63, 1);
+        slider.setSliderStyle (Slider::LinearHorizontal);
+        slider.setTextBoxStyle (Slider::TextBoxRight, false, 36, 16);
+        slider.setNumDecimalPlacesToDisplay (0);
+        slider.setDoubleClickReturnValue (true, 0);
+
+        Value valueElPitch = valueTreeVoice.getPropertyAsValue (pitchId.toString(), &undoManager);
+        slider.getValueObject().referTo (valueElPitch);
+    }
+
     void setupMixerElOutsel (MidiSlider& slider, uint8 elementOffset, const Identifier& outselId)
     {
         int sysex[9] = { 0x43, sysexEngine, 0x34, 0x03, elementOffset, 0x00, 0x08, 0x00, 0x00 };
@@ -1773,6 +2169,18 @@ void setNombreElements (int nombre)
 
     void initMixerLevelControls()
     {
+#if JUCE_DEBUG
+        {
+            static bool outselUiBitmapLogged = false;
+
+            if (! outselUiBitmapLogged)
+            {
+                Logger::writeToLog ("[OUTSEL audit] ui-bitmap: off=0x00 G1=0x02 G2=0x04 both=0x06"
+                                    " (MixerOutputGroupBinding out1Bit/out2Bit mask=0x06)");
+                outselUiBitmapLogged = true;
+            }
+        }
+#endif
         setupEffectEfmode (sliderEfmode);
         setupMixerElLevel (sliderMixerEl1Level, 0x00, IDs::ELEMENT1VOLUME);
         setupMixerElOutsel (sliderMixerEl1Outsel, 0x00, IDs::ELEMENT1OUTSEL);
@@ -1800,6 +2208,14 @@ void setNombreElements (int nombre)
         setupMixerElVelocityLimitHigh (sliderMixerEl2VelocityLimitHigh, 0x20, IDs::ELEMENT2VELOCITYLIMITHIGH);
         setupMixerElVelocityLimitHigh (sliderMixerEl3VelocityLimitHigh, 0x40, IDs::ELEMENT3VELOCITYLIMITHIGH);
         setupMixerElVelocityLimitHigh (sliderMixerEl4VelocityLimitHigh, 0x60, IDs::ELEMENT4VELOCITYLIMITHIGH);
+        setupMixerElDetune (sliderMixerEl1Detune, 0x00, IDs::ELEMENT1FINE);
+        setupMixerElDetune (sliderMixerEl2Detune, 0x20, IDs::ELEMENT2FINE);
+        setupMixerElDetune (sliderMixerEl3Detune, 0x40, IDs::ELEMENT3FINE);
+        setupMixerElDetune (sliderMixerEl4Detune, 0x60, IDs::ELEMENT4FINE);
+        setupMixerElNoteShift (sliderMixerEl1NoteShift, 0x00, IDs::ELEMENT1PITCH);
+        setupMixerElNoteShift (sliderMixerEl2NoteShift, 0x20, IDs::ELEMENT2PITCH);
+        setupMixerElNoteShift (sliderMixerEl3NoteShift, 0x40, IDs::ELEMENT3PITCH);
+        setupMixerElNoteShift (sliderMixerEl4NoteShift, 0x60, IDs::ELEMENT4PITCH);
     }
 
     void layoutCommonPanel()
@@ -2053,6 +2469,24 @@ struct VoiceCommonPage : public Component,
         voice.sliderMixerEl3VelocityLimitHigh.setPopupDisplayEnabled (true, true, &mixerGroup);
         voice.sliderMixerEl4VelocityLimitHigh.setPopupDisplayEnabled (true, true, &mixerGroup);
 
+        mixerSection.attachStripDetuneControl (0, voice.sliderMixerEl1Detune);
+        mixerSection.attachStripDetuneControl (1, voice.sliderMixerEl2Detune);
+        mixerSection.attachStripDetuneControl (2, voice.sliderMixerEl3Detune);
+        mixerSection.attachStripDetuneControl (3, voice.sliderMixerEl4Detune);
+        voice.sliderMixerEl1Detune.setPopupDisplayEnabled (true, true, &mixerGroup);
+        voice.sliderMixerEl2Detune.setPopupDisplayEnabled (true, true, &mixerGroup);
+        voice.sliderMixerEl3Detune.setPopupDisplayEnabled (true, true, &mixerGroup);
+        voice.sliderMixerEl4Detune.setPopupDisplayEnabled (true, true, &mixerGroup);
+
+        mixerSection.attachStripNoteShiftControl (0, voice.sliderMixerEl1NoteShift);
+        mixerSection.attachStripNoteShiftControl (1, voice.sliderMixerEl2NoteShift);
+        mixerSection.attachStripNoteShiftControl (2, voice.sliderMixerEl3NoteShift);
+        mixerSection.attachStripNoteShiftControl (3, voice.sliderMixerEl4NoteShift);
+        voice.sliderMixerEl1NoteShift.setPopupDisplayEnabled (true, true, &mixerGroup);
+        voice.sliderMixerEl2NoteShift.setPopupDisplayEnabled (true, true, &mixerGroup);
+        voice.sliderMixerEl3NoteShift.setPopupDisplayEnabled (true, true, &mixerGroup);
+        voice.sliderMixerEl4NoteShift.setPopupDisplayEnabled (true, true, &mixerGroup);
+
         mixerSection.bindOutputGroupForStrip (0, mixerEl1OutputGroup, voice.sliderMixerEl1Outsel);
         mixerSection.bindOutputGroupForStrip (1, mixerEl2OutputGroup, voice.sliderMixerEl2Outsel);
         mixerSection.bindEffectSendSelectForStrip (0, mixerEl1EffectSendSelect,
@@ -2067,11 +2501,29 @@ struct VoiceCommonPage : public Component,
         voice.sliderMixerEl1Efsendscl.setPopupDisplayEnabled (true, true, &mixerGroup);
 
         syncMixerStripVisibility();
+
+        refreshMixerBoundControlsCallback() = [this]()
+        {
+            refreshMixerBoundControls();
+        };
+
+        syncCommonMixerLayoutCallback() = [this]()
+        {
+            syncMixerStripVisibility();
+        };
+    }
+
+    void refreshMixerBoundControls() noexcept
+    {
+        mixerEl1OutputGroup.refreshButtonsFromSlider();
+        mixerEl2OutputGroup.refreshButtonsFromSlider();
+        mixerEl1EffectSendSelect.refreshButtonsFromSlider();
     }
 
     ~VoiceCommonPage() override
     {
-        restorePitchDetuneSliders();
+        refreshMixerBoundControlsCallback() = nullptr;
+        syncCommonMixerLayoutCallback() = nullptr;
         voice.removeChangeListener (this);
         voice.ensurePitchControlsParentedToCommonPanel();
     }
@@ -2081,9 +2533,7 @@ struct VoiceCommonPage : public Component,
         Component::visibilityChanged();
 
         if (isShowing() && isVisible())
-            attachMixerDetuneSliders();
-        else
-            restorePitchDetuneSliders();
+            syncMixerStripVisibility();
     }
 
     void changeListenerCallback (ChangeBroadcaster* source) override
@@ -2101,72 +2551,86 @@ struct VoiceCommonPage : public Component,
         for (int i = 0; i < 4; ++i)
             mixerSection.setStripEngineType (i, elements[i]->getOpMode());
 
-        if (mixerDetuneSlidersAttached)
-            mixerSection.relayoutLiveStripRows();
+        mixerSection.relayoutLiveStripRows();
 
-        if (isShowing())
-            resized();
+        Logger::writeToLog ("[Mixer layout] activeStrips=" + String (mixerSection.getActiveStripCount())
+                            + " nombreElements=" + String (voice.nombreElements));
+
+        resized();
     }
 
     void resized() override
     {
         viewport.setBounds (getLocalBounds());
 
-        const int outerPad = 8;
-        const int rowH = 18;
-        const int gap = 2;
-        const int labW = 56;
-        const int groupInsetX = 12;
-        const int groupInsetY = 20;
-        const int gapBetweenGroups = 8;
+        // Compact two-column layout so Common tab fits one screenshot without scrolling.
+        const int outerPad = 6;
+        const int rowH = 14;
+        const int gap = 1;
+        const int labW = 44;
+        const int groupInsetX = 8;
+        const int groupInsetY = 12;
+        const int gapBetweenGroups = 4;
+        const int colGap = 6;
+        const int pairGap = 6;
+
+        const auto groupHeightForRows = [&] (int rows) noexcept
+        {
+            return groupInsetY + rows * (rowH + gap) + 6;
+        };
 
         const int mixerInnerH = MixerSection::preferredHeight();
-        const int mixerGroupH = groupInsetY * 2 + mixerInnerH + 8;
-        const int pitchRows = 1;
-        const int pitchGroupH = groupInsetY + pitchRows * (rowH + gap) + 8;
-        const int microTuneRows = 1;
-        const int microTuneGroupH = groupInsetY + microTuneRows * (rowH + gap) + 8;
-        const int afterTouchRows = 3;
-        const int afterTouchGroupH = groupInsetY + afterTouchRows * (rowH + gap) + 8;
-        const int ctrlRows = 3;
-        const int pairGap = 10;
-        const int controllersGroupH = groupInsetY + ctrlRows * (rowH + gap) + 8;
-        const int panRows = 4;
-        const int panGroupH = groupInsetY + panRows * (rowH + gap) + 8;
-        const int randomPitchRows = 1;
-        const int randomPitchGroupH = groupInsetY + randomPitchRows * (rowH + gap) + 8;
-        const int otherRows = 3;
-        const int otherGroupH = groupInsetY + otherRows * (rowH + gap) + 8;
+        const int mixerGroupH = groupInsetY * 2 + mixerInnerH + 6;
+        const int pitchGroupH = groupHeightForRows (1);
+        const int microTuneGroupH = groupHeightForRows (1);
+        const int afterTouchGroupH = groupHeightForRows (3);
+        const int controllersGroupH = groupHeightForRows (3);
+        const int panGroupH = groupHeightForRows (4);
+        const int randomPitchGroupH = groupHeightForRows (1);
+        const int otherGroupH = groupHeightForRows (3);
 
         const int contentW = jmax (160, viewport.getMaximumVisibleWidth());
         const int fullW = jmax (160, contentW - 2 * outerPad);
+        const int colW = jmax (120, (fullW - colGap) / 2);
 
         int yCur = outerPad;
         mixerGroup.setBounds (outerPad, yCur, fullW, mixerGroupH);
         yCur += mixerGroupH + gapBetweenGroups;
-        pitchGroup.setBounds (outerPad, yCur, fullW, pitchGroupH);
-        yCur += pitchGroupH + gapBetweenGroups;
-        microTuneGroup.setBounds (outerPad, yCur, fullW, microTuneGroupH);
-        yCur += microTuneGroupH + gapBetweenGroups;
-        afterTouchGroup.setBounds (outerPad, yCur, fullW, afterTouchGroupH);
-        yCur += afterTouchGroupH + gapBetweenGroups;
-        controllersGroup.setBounds (outerPad, yCur, fullW, controllersGroupH);
-        yCur += controllersGroupH + gapBetweenGroups;
-        panGroup.setBounds (outerPad, yCur, fullW, panGroupH);
-        yCur += panGroupH + gapBetweenGroups;
-        randomPitchGroup.setBounds (outerPad, yCur, fullW, randomPitchGroupH);
-        yCur += randomPitchGroupH + gapBetweenGroups;
-        otherGroup.setBounds (outerPad, yCur, fullW, otherGroupH);
-        yCur += otherGroupH + outerPad;
 
+        const int paramsTop = yCur;
+        int leftY = paramsTop;
+        pitchGroup.setBounds (outerPad, leftY, colW, pitchGroupH);
+        leftY += pitchGroupH + gapBetweenGroups;
+        microTuneGroup.setBounds (outerPad, leftY, colW, microTuneGroupH);
+        leftY += microTuneGroupH + gapBetweenGroups;
+        afterTouchGroup.setBounds (outerPad, leftY, colW, afterTouchGroupH);
+        leftY += afterTouchGroupH + gapBetweenGroups;
+        randomPitchGroup.setBounds (outerPad, leftY, colW, randomPitchGroupH);
+        leftY += randomPitchGroupH + outerPad;
+
+        const int rightX = outerPad + colW + colGap;
+        int rightY = paramsTop;
+        controllersGroup.setBounds (rightX, rightY, colW, controllersGroupH);
+        rightY += controllersGroupH + gapBetweenGroups;
+        panGroup.setBounds (rightX, rightY, colW, panGroupH);
+        rightY += panGroupH + gapBetweenGroups;
+        otherGroup.setBounds (rightX, rightY, colW, otherGroupH);
+        rightY += otherGroupH + outerPad;
+
+        yCur = jmax (leftY, rightY);
         content.setSize (contentW, yCur);
+
+        const int viewH = viewport.getMaximumVisibleHeight();
+        viewport.setScrollBarsShown (yCur > viewH + 2, false);
 
         {
             auto box = mixerGroup.getLocalBounds().reduced (groupInsetX, groupInsetY);
             const int mixerInnerW = MixerSection::preferredContentWidth (mixerSection.getActiveStripCount(),
                                                                          box.getWidth());
+            const int mixerInnerH = MixerSection::preferredHeight();
             mixerSection.setBounds (box.getX(), box.getY(),
-                                    jmin (mixerInnerW, box.getWidth()), box.getHeight());
+                                    jmin (mixerInnerW, box.getWidth()),
+                                    jmin (box.getHeight(), mixerInnerH));
         }
         {
             auto box = pitchGroup.getLocalBounds().reduced (groupInsetX, groupInsetY);
@@ -2305,55 +2769,6 @@ private:
     MixerOutputGroupBinding mixerEl1OutputGroup;
     MixerOutputGroupBinding mixerEl2OutputGroup;
     MixerEffectSendSelectBinding mixerEl1EffectSendSelect;
-
-    bool mixerDetuneSlidersAttached = false;
-
-    void attachMixerDetuneSliders()
-    {
-        if (mixerDetuneSlidersAttached)
-            return;
-
-        Element* elements[] = { &voice.element1, &voice.element2,
-                                &voice.element3, &voice.element4 };
-
-        for (int i = 0; i < 4; ++i)
-        {
-            mixerSection.attachStripDetuneControl (i, elements[i]->getDetuneSlider());
-            elements[i]->getDetuneSlider().setPopupDisplayEnabled (true, true, &mixerGroup);
-            mixerSection.attachStripNoteShiftControl (i, elements[i]->getNoteShiftSlider());
-            elements[i]->getNoteShiftSlider().setPopupDisplayEnabled (true, true, &mixerGroup);
-        }
-
-        mixerDetuneSlidersAttached = true;
-
-        mixerSection.relayoutLiveStripRows();
-
-        if (isShowing())
-            resized();
-    }
-
-    void restorePitchDetuneSliders()
-    {
-        if (! mixerDetuneSlidersAttached)
-            return;
-
-        for (int i = 0; i < 4; ++i)
-        {
-            mixerSection.detachStripDetuneControl (i);
-            mixerSection.detachStripNoteShiftControl (i);
-        }
-
-        voice.element1.restoreDetuneSliderToPitchPanel();
-        voice.element2.restoreDetuneSliderToPitchPanel();
-        voice.element3.restoreDetuneSliderToPitchPanel();
-        voice.element4.restoreDetuneSliderToPitchPanel();
-        voice.element1.restoreNoteShiftSliderToPitchPanel();
-        voice.element2.restoreNoteShiftSliderToPitchPanel();
-        voice.element3.restoreNoteShiftSliderToPitchPanel();
-        voice.element4.restoreNoteShiftSliderToPitchPanel();
-
-        mixerDetuneSlidersAttached = false;
-    }
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (VoiceCommonPage)
 };

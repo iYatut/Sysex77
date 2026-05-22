@@ -17,6 +17,7 @@ META = {
     "WPBR": dict(live="liveWpbrRaw", b8101=None, b0040="lm0040WpbrRaw", cf8101=False, cf0040=True, cand=False, packed=False),
     "WLLML": dict(live="liveWllmlRaw", b8101=None, b0040="lm0040WllmlRaw", cf8101=False, cf0040=True, cand=False, packed=False),
     "SPTPNT": dict(live="liveSptpntRaw", b8101=None, b0040="lm0040SptpntRaw", cf8101=False, cf0040=True, cand=False, packed=False),
+    "EFMODE": dict(live="efmodeRaw", b8101=None, b0040="lm0040EfmodeRaw", cf8101=False, cf0040=True, cand=False, packed=False),
     "ELVL": dict(live="elementLevelRaw", b8101="lmElvlE1Raw", b0040=None, cf8101=True, cf0040=False, cand=False, packed=False, per_el=True),
     "ATPBR": dict(live="liveAtpbrRaw", b8101=None, b0040="lm0040AtpbrRaw", cf8101=False, cf0040=False, cand=True, packed=False),
     "PMASN": dict(live="livePmasnRaw", b8101=None, b0040="lm0040PmasnRaw", cf8101=False, cf0040=False, cand=True, packed=False),
@@ -36,6 +37,7 @@ class State:
         self.hasParsedBulk8101 = False
         self.hasParsedBulk0040 = False
         self.elmodeRaw = -1
+        self.efmodeRaw = -1
         self.commonVolumeRaw = -1
         self.lmElmodeRaw = -1
         self.lmWolRaw = -1
@@ -61,6 +63,7 @@ class State:
         self.lm0040MctunRaw = -1
         self.lm0040RndpRaw = -1
         self.lm0040AftmdRaw = -1
+        self.lm0040EfmodeRaw = -1
         self.lmVoiceName = ""
         self.voiceName = ""
         self.voiceNameCharCount = 0
@@ -93,6 +96,7 @@ def apply_bulk0040(s: State, p40: dict) -> None:
         "MCTUN": "lm0040MctunRaw",
         "RNDP": "lm0040RndpRaw",
         "AFTMD": "lm0040AftmdRaw",
+        "EFMODE": "lm0040EfmodeRaw",
     }
     for k, attr in mapping.items():
         if k in p40["fields"]:
@@ -217,12 +221,26 @@ def main() -> int:
         got, src = resolve(s, tag)
         record(f"block0040/{tag}", got < 0 and src == "None", tag, "block0040", got, -1, src)
 
-    for tag in ("WPBR", "WLLML", "SPTPNT"):
+    for tag in ("WPBR", "WLLML", "SPTPNT", "EFMODE"):
         s = State()
         s.hasParsedBulk0040 = True
         setattr(s, META[tag]["b0040"], 55)
         got, src = resolve(s, tag)
         record(f"allow0040/{tag}", got == 55 and src == "0040", tag, "allow0040", got, 55, src)
+
+    for fid, fn, exp_efmode in (
+        ("06", "06_efmode_off_ep_grndual.syx", 0),
+        ("07", "07_efmode_serial_ep_grndual.syx", 1),
+        ("08", "08_efmode_parallel_ep_grndual.syx", 2),
+    ):
+        data = (FIX / fn).read_bytes()
+        p8101 = parse_lm8101_vc(find_lm8101_frame(data))
+        p40 = parse_lm0040_vc(find_frame(data, "0040VC"))
+        s = State()
+        apply_bulk8101(s, p8101)
+        apply_bulk0040(s, p40)
+        got, src = resolve(s, "EFMODE")
+        record(f"bulk/{fid}/EFMODE", got == exp_efmode and src == "0040", "EFMODE", fid, got, exp_efmode, src)
 
     print("=== REGISTRY PATH VERIFICATION ===")
     for key in sorted(results):

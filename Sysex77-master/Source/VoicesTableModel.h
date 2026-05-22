@@ -161,6 +161,27 @@ inline bool& suppressEditorPatchDirtyMark() noexcept
     return suppress;
 }
 
+/** After Stop sync: skip exit gate while async slider notifications drain. */
+inline bool& editorSyncBaselineGracePeriod() noexcept
+{
+    static bool grace = false;
+    return grace;
+}
+
+/** Wired from VoiceCommonPage — refresh OUTSEL / EFSEND toggle buttons after apply. */
+inline std::function<void()>& refreshMixerBoundControlsCallback() noexcept
+{
+    static std::function<void()> cb;
+    return cb;
+}
+
+/** Wired from VoiceCommonPage — relayout mixer strip count/width after ELMODE sync. */
+inline std::function<void()>& syncCommonMixerLayoutCallback() noexcept
+{
+    static std::function<void()> cb;
+    return cb;
+}
+
 inline void markEditorPatchDirty() noexcept
 {
     if (! suppressEditorPatchDirtyMark())
@@ -244,8 +265,10 @@ inline bool tryLeaveEditorContext (std::function<void()> onProceed)
     if (! onProceed)
         return true;
 
-    if (! editorPatchDirty() || suppressEditorExitPrompt())
+    if (! editorPatchDirty() || suppressEditorExitPrompt() || editorSyncBaselineGracePeriod())
         return executeEditorExitActionOnce (onProceed);
+
+    juce::Logger::writeToLog ("[Editor exit gate] dirty=1 — Save re-reads UI into baseline; Apply/Cancel discard navigation or skip baseline");
 
     pendingEditorExitAction() = std::move (onProceed);
 

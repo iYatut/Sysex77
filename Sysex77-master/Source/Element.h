@@ -30,7 +30,7 @@ public:
      
         addAndMakeSlider(sliderVolume);
         sliderVolume.setColour(Slider::ColourIds::thumbColourId, Colours::darkorange);
-        sliderVolume.setRange(0, 100);
+        sliderVolume.setRange(0, 127, 1);
         sliderVolume.setPopupDisplayEnabled(true, true, this);
         sliderVolume.setNumDecimalPlacesToDisplay(0);
         sliderVolume.addListener(this);

@@ -179,8 +179,8 @@ namespace
         if (const int query = id.indexOfChar ('?'); query >= 0)
             id = id.substring (0, query);
 
-        if (stripValueMapSuffix && id.endsWithIgnoreCase ("/value-map"))
-            id = id.substring (0, id.length() - (int) juce::String ("/value-map").length());
+        if (const int slash = id.indexOfChar ('/'); slash >= 0)
+            id = id.substring (0, slash);
 
         return id.trim();
     }
@@ -193,6 +193,26 @@ namespace
             withoutQuery = withoutQuery.substring (0, query);
 
         return withoutQuery.endsWithIgnoreCase ("/value-map");
+    }
+
+    bool pathIsParamCompareLog (const juce::String& path)
+    {
+        juce::String withoutQuery = path;
+
+        if (const int query = withoutQuery.indexOfChar ('?'); query >= 0)
+            withoutQuery = withoutQuery.substring (0, query);
+
+        return withoutQuery.endsWithIgnoreCase ("/compare-log");
+    }
+
+    bool pathIsParamFocusSy99 (const juce::String& path)
+    {
+        juce::String withoutQuery = path;
+
+        if (const int query = withoutQuery.indexOfChar ('?'); query >= 0)
+            withoutQuery = withoutQuery.substring (0, query);
+
+        return withoutQuery.endsWithIgnoreCase ("/focus-sy99");
     }
 
     int queryIntParam (const juce::String& path, const juce::String& key, int defaultValue)
@@ -265,6 +285,41 @@ namespace
         if (req.method == "GET" && req.path.equalsIgnoreCase ("/api/dump/current"))
         {
             writeJson (client, 200, Sy99ParamRegistry::currentLiveDumpToJsonVar());
+            return;
+        }
+
+        if (req.method == "POST" && req.path.equalsIgnoreCase ("/api/focus-sy99"))
+        {
+            const juce::var body = req.body.isNotEmpty() ? juce::JSON::parse (req.body) : juce::var();
+            const juce::String paramId = body.getProperty ("paramId", {}).toString();
+            const int elementIndex = (int) body.getProperty ("elementIndex", 0);
+            const int rawOverride = (int) body.getProperty ("raw", -1);
+            const uint8 sysexDevice = (uint8) juce::jlimit (0, 127, (int) body.getProperty ("sysexDevice", 16));
+            const Sy99ParamRegistry::Id id = Sy99ParamRegistry::idFromString (paramId);
+
+            if (id >= Sy99ParamRegistry::Id::Count)
+            {
+                juce::StringPairArray extra;
+                extra.set ("paramId", paramId);
+                writeJson (client, 404, errorJson ("unknown parameter id", extra));
+                return;
+            }
+
+            juce::String error;
+
+            if (! Sy99ParamRegistry::focusSy99ParameterEditor (id, elementIndex, sysexDevice,
+                                                               rawOverride, error))
+            {
+                writeJson (client, 409, errorJson (error.isNotEmpty() ? error
+                                                                      : juce::String ("focus failed")));
+                return;
+            }
+
+            auto* ok = new juce::DynamicObject();
+            ok->setProperty ("ok", true);
+            ok->setProperty ("paramId", paramId);
+            ok->setProperty ("elementIndex", elementIndex);
+            writeJson (client, 200, ok);
             return;
         }
 
@@ -419,7 +474,11 @@ namespace
         if (req.path.startsWithIgnoreCase ("/api/params/"))
         {
             const bool wantsValueMap = pathIsParamValueMap (req.path);
-            const juce::String paramId = extractParamIdFromPath (req.path, wantsValueMap);
+            const bool wantsCompareLog = pathIsParamCompareLog (req.path);
+            const bool wantsFocusSy99 = pathIsParamFocusSy99 (req.path);
+            const juce::String paramId = extractParamIdFromPath (req.path,
+                                                                  wantsValueMap || wantsCompareLog
+                                                                      || wantsFocusSy99);
             const Sy99ParamRegistry::Id id = Sy99ParamRegistry::idFromString (paramId);
 
             if (id >= Sy99ParamRegistry::Id::Count)
@@ -446,15 +505,64 @@ namespace
                 return;
             }
 
-            if (req.method == "GET")
+            if (req.method == "POST" && wantsCompareLog)
             {
-                if (const Sy99ParamRegistry::Meta* meta = Sy99ParamRegistry::metaFor (id))
+                const int elementIndex = queryIntParam (req.path, "elementIndex", 0);
+                const uint8 sysexDevice = querySysexDeviceByte (req.path);
+                const juce::var body = req.body.isNotEmpty() ? juce::JSON::parse (req.body) : juce::var();
+                const juce::String logText = body.getProperty ("logText", {}).toString();
+                const juce::var overrides = body.getProperty ("rowOverrides", {});
+
+                const juce::var result = Sy99ParamRegistry::compareObservationLogToJsonVar (
+                    id, elementIndex, sysexDevice, logText, overrides);
+
+                if (result.isVoid())
                 {
-                    writeJson (client, 200, Sy99ParamRegistry::metaToVar (*meta));
+                    writeJson (client, 404, errorJson ("parameter not found"));
                     return;
                 }
 
-                writeJson (client, 404, errorJson ("parameter not found"));
+                writeJson (client, 200, result);
+                return;
+            }
+
+            if (req.method == "POST" && wantsFocusSy99)
+            {
+                const int elementIndex = queryIntParam (req.path, "elementIndex", 0);
+                const uint8 sysexDevice = querySysexDeviceByte (req.path);
+                const juce::var body = req.body.isNotEmpty() ? juce::JSON::parse (req.body) : juce::var();
+                const int rawOverride = (int) body.getProperty ("raw", -1);
+                juce::String error;
+
+                if (! Sy99ParamRegistry::focusSy99ParameterEditor (id, elementIndex, sysexDevice,
+                                                                   rawOverride, error))
+                {
+                    writeJson (client, 409, errorJson (error.isNotEmpty() ? error
+                                                                      : juce::String ("focus failed")));
+                    return;
+                }
+
+                auto* ok = new juce::DynamicObject();
+                ok->setProperty ("ok", true);
+                ok->setProperty ("paramId", paramId);
+                ok->setProperty ("elementIndex", elementIndex);
+                ok->setProperty ("message",
+                                 "Sent current parameter value to SY99 (page jump, value unchanged)");
+                writeJson (client, 200, ok);
+                return;
+            }
+
+            if (req.method == "GET")
+            {
+                const juce::var record = Sy99ParamRegistry::metaRecordToJsonVar (id);
+
+                if (record.isVoid())
+                {
+                    writeJson (client, 404, errorJson ("parameter not found"));
+                    return;
+                }
+
+                writeJson (client, 200, record);
                 return;
             }
 
@@ -478,13 +586,15 @@ namespace
 
                 Sy99ParamRegistry::persistActiveMetaRegistry();
 
-                if (const Sy99ParamRegistry::Meta* meta = Sy99ParamRegistry::metaFor (id))
+                const juce::var record = Sy99ParamRegistry::metaRecordToJsonVar (id);
+
+                if (record.isVoid())
                 {
-                    writeJson (client, 200, Sy99ParamRegistry::metaToVar (*meta));
+                    writeJson (client, 500, errorJson ("patch applied but meta lookup failed"));
                     return;
                 }
 
-                writeJson (client, 500, errorJson ("patch applied but meta lookup failed"));
+                writeJson (client, 200, record);
                 return;
             }
 

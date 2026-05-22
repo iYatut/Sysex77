@@ -5,6 +5,9 @@ https://data.yamaha.com/files/download/other_assets/2/317162/SY99E2.PDF
 
 Локальная копия (если скачана): `_agent_context/SY99E2.pdf`. Подробности извлечения текста см. `_agent_context/SY99E2_reference.txt`.
 
+**Bulk dump (request/response, `F0 43 2n/0n 7A …`)** — отдельный документ: **`sy99_bulk_dump_request.md`**.  
+Этот файл описывает только **parameter change** (`F0 43 1n 34 …`).
+
 Ниже по-прежнему — разбор **реализации Sysex77** и журнала `Source/MIDI_MAP_OBSERVATIONS.md`; таблицы адресов из PDF сюда не переписывались (у дистрибутива PDF без текстового слоя нужен OCR или ручной перенос).
 
 ---

@@ -60,6 +60,13 @@ public:
         sendViaSlider = nullptr;
     }
 
+    /** Sync toggle buttons after programmatic slider setValue(dontSendNotification). */
+    void refreshButtonsFromSlider() noexcept
+    {
+        if (sendViaSlider != nullptr)
+            applyRawByteToButtons ((uint8) (int) sendViaSlider->getValue());
+    }
+
 private:
     static constexpr uint8 out1Bit = 0x02;
     static constexpr uint8 out2Bit = 0x04;
@@ -167,6 +174,17 @@ public:
         efmodeViaSlider = nullptr;
     }
 
+    /** Sync Send 1/3 toggles (and EFMODE visibility) after programmatic apply. */
+    void refreshButtonsFromSlider() noexcept
+    {
+        if (sendViaSlider != nullptr)
+            applyRawByteToButtons ((uint8) (int) sendViaSlider->getValue());
+
+        if (efmodeViaSlider != nullptr)
+            applyEffectSendSelectVisibilityFromEffectMode (btSend1, btSend3,
+                                                           (uint8) (int) efmodeViaSlider->getValue());
+    }
+
 private:
     static constexpr uint8 send1Bit = 0x01;
     static constexpr uint8 send3Bit = 0x04;
@@ -240,11 +258,22 @@ private:
 };
 
 //==============================================================================
+struct MixerLayout
+{
+    static constexpr int rowH = 22;
+    static constexpr int rowGap = 3;
+    static constexpr int headerH = 20;
+    static constexpr int effectSendLblH = 10;
+    static constexpr int effectSendKnobSz = 22;
+    static constexpr int effectSendBlockH = rowH + rowGap + effectSendLblH + effectSendKnobSz;
+};
+
+//==============================================================================
 /** One vertical strip: El.N header + v1 parameter rows + reserved effect rows. */
 class MixerElementStrip : public Component
 {
 public:
-    static constexpr int kEffectSendBlockH = 18 + 2 + 10 + 22;
+    static constexpr int kEffectSendBlockH = MixerLayout::effectSendBlockH;
 
     explicit MixerElementStrip (const String& elementBaseName)
         : baseName (elementBaseName)
@@ -272,11 +301,7 @@ public:
         setupOutputGroupButton (btEffectSendLine1, "Send 1");
         setupOutputGroupButton (btEffectSendLine3, "Send 3");
         addAndMakeVisible (btEffectSendLine1);
-        addChildComponent (btEffectSendLine2);
         addAndMakeVisible (btEffectSendLine3);
-        addChildComponent (btEffectSendLine4);
-        btEffectSendLine2.setVisible (false);
-        btEffectSendLine4.setVisible (false);
 
         for (auto* lab : { &lblEffectSendLvl, &lblEffectSendVel, &lblEffectSendScl })
         {
@@ -300,7 +325,13 @@ public:
     {
         level.setVisible (false);
         liveLevelControl = &liveLevel;
+
+        if (auto* oldParent = liveLevel.getParentComponent())
+            oldParent->removeChildComponent (&liveLevel);
+
         addAndMakeVisible (liveLevel);
+        styleMixerStripSlider (liveLevel);
+        relayoutRows();
     }
 
     void attachLiveNoteLimitLowControl (MidiSlider& liveNoteLimitLow)
@@ -313,8 +344,7 @@ public:
 
         addAndMakeVisible (liveNoteLimitLow);
         styleMixerStripSlider (liveNoteLimitLow);
-        liveNoteLimitLow.setBounds (0, 0, getWidth(), 18);
-        resized();
+        relayoutRows();
     }
 
     void attachLiveNoteLimitHighControl (MidiSlider& liveNoteLimitHigh)
@@ -327,8 +357,7 @@ public:
 
         addAndMakeVisible (liveNoteLimitHigh);
         styleMixerStripSlider (liveNoteLimitHigh);
-        liveNoteLimitHigh.setBounds (0, 0, getWidth(), 18);
-        resized();
+        relayoutRows();
     }
 
     void attachLiveVelocityLimitLowControl (MidiSlider& liveVelocityLimitLow)
@@ -341,8 +370,7 @@ public:
 
         addAndMakeVisible (liveVelocityLimitLow);
         styleMixerStripSlider (liveVelocityLimitLow);
-        liveVelocityLimitLow.setBounds (0, 0, getWidth(), 18);
-        resized();
+        relayoutRows();
     }
 
     void attachLiveVelocityLimitHighControl (MidiSlider& liveVelocityLimitHigh)
@@ -355,8 +383,7 @@ public:
 
         addAndMakeVisible (liveVelocityLimitHigh);
         styleMixerStripSlider (liveVelocityLimitHigh);
-        liveVelocityLimitHigh.setBounds (0, 0, getWidth(), 18);
-        resized();
+        relayoutRows();
     }
 
     void attachLiveDetuneControl (MidiSlider& liveDetune)
@@ -369,8 +396,9 @@ public:
 
         addAndMakeVisible (liveDetune);
         styleMixerStripSlider (liveDetune);
-        liveDetune.setBounds (0, 0, getWidth(), 18);
-        resized();
+        liveDetune.setRange (-7, 7, 1);
+        liveDetune.setDoubleClickReturnValue (true, 0);
+        relayoutRows();
     }
 
     void detachLiveDetuneControl()
@@ -380,6 +408,7 @@ public:
             removeChildComponent (liveDetuneControl);
             liveDetuneControl = nullptr;
             detune.setVisible (true);
+            relayoutRows();
         }
     }
 
@@ -393,8 +422,9 @@ public:
 
         addAndMakeVisible (liveNoteShift);
         styleMixerStripSlider (liveNoteShift);
-        liveNoteShift.setBounds (0, 0, getWidth(), 18);
-        resized();
+        liveNoteShift.setRange (-64, 63, 1);
+        liveNoteShift.setDoubleClickReturnValue (true, 0);
+        relayoutRows();
     }
 
     void detachLiveNoteShiftControl()
@@ -404,6 +434,7 @@ public:
             removeChildComponent (liveNoteShiftControl);
             liveNoteShiftControl = nullptr;
             noteShift.setVisible (true);
+            relayoutRows();
         }
     }
 
@@ -417,12 +448,17 @@ public:
         liveEffectSendLevelControl = &liveLevel;
         liveEffectSendVelSensControl = &liveVelSens;
         liveEffectSendScalingControl = &liveScaling;
-        addAndMakeVisible (liveLevel);
-        addAndMakeVisible (liveVelSens);
-        addAndMakeVisible (liveScaling);
-        setupEffectSendKnob (liveLevel);
-        setupEffectSendKnob (liveVelSens);
-        setupEffectSendKnob (liveScaling);
+
+        for (auto* slider : { &liveLevel, &liveVelSens, &liveScaling })
+        {
+            if (auto* oldParent = slider->getParentComponent())
+                oldParent->removeChildComponent (slider);
+
+            addAndMakeVisible (*slider);
+            setupEffectSendKnob (*slider);
+        }
+
+        relayoutRows();
     }
 
     void setEngineSuffix (const String& engine)
@@ -434,15 +470,27 @@ public:
     TextButton& getOutputGroup1Button() noexcept { return btOutputGroup1; }
     TextButton& getOutputGroup2Button() noexcept { return btOutputGroup2; }
     TextButton& getEffectSendLine1Button() noexcept { return btEffectSendLine1; }
-    TextButton& getEffectSendLine2Button() noexcept { return btEffectSendLine2; }
     TextButton& getEffectSendLine3Button() noexcept { return btEffectSendLine3; }
-    TextButton& getEffectSendLine4Button() noexcept { return btEffectSendLine4; }
 
     void resized() override
     {
-        const int rowH = 18;
-        const int gap = 2;
-        const int headerH = 20;
+        relayoutRows();
+    }
+
+    static int preferredContentHeight() noexcept
+    {
+        return MixerLayout::headerH
+             + 8 * (MixerLayout::rowH + MixerLayout::rowGap)
+             + MixerLayout::rowH + MixerLayout::rowGap
+             + MixerLayout::effectSendBlockH;
+    }
+
+private:
+    void relayoutRows()
+    {
+        const int rowH = MixerLayout::rowH;
+        const int gap = MixerLayout::rowGap;
+        const int headerH = MixerLayout::headerH;
 
         auto bounds = getLocalBounds();
         header.setBounds (bounds.removeFromTop (headerH));
@@ -450,6 +498,7 @@ public:
         auto placeRow = [&] (Component& c)
         {
             c.setBounds (bounds.removeFromTop (rowH));
+            c.toFront (false);
             bounds.removeFromTop (gap);
         };
 
@@ -465,8 +514,6 @@ public:
         bounds.removeFromTop (gap);
         placeEffectSendBlock (bounds.removeFromTop (effectSendBlockH));
     }
-
-private:
     Component& levelRowComponent()
     {
         return liveLevelControl != nullptr ? static_cast<Component&> (*liveLevelControl)
@@ -537,8 +584,8 @@ private:
 
         block.removeFromTop (effectSendInnerGap);
 
-        const int lblH = effectSendLblH;
-        const int knobSz = effectSendKnobSz;
+        const int lblH = MixerLayout::effectSendLblH;
+        const int knobSz = MixerLayout::effectSendKnobSz;
         const int colGap = 2;
         const int colW = (block.getWidth() - 2 * colGap) / 3;
         int x = block.getX();
@@ -587,14 +634,16 @@ private:
     {
         s.setEnabled (false);
         s.setSliderStyle (Slider::LinearHorizontal);
-        s.setTextBoxStyle (Slider::TextBoxRight, false, 36, 16);
+        s.setTextBoxStyle (Slider::TextBoxRight, false, 36, MixerLayout::rowH - 4);
         s.setRange (0, 127, 1);
     }
 
     static void styleMixerStripSlider (MidiSlider& s)
     {
+        s.setLookAndFeel (nullptr);
         s.setSliderStyle (Slider::LinearHorizontal);
-        s.setTextBoxStyle (Slider::TextBoxRight, false, 36, 16);
+        s.setTextBoxStyle (Slider::TextBoxRight, false, 44, MixerLayout::rowH - 4);
+        s.setNumDecimalPlacesToDisplay (0);
     }
 
     static void setupReservedPlaceholder (Label& lab)
@@ -625,19 +674,15 @@ private:
     TextButton btOutputGroup2 { "Group 2" };
 
     TextButton btEffectSendLine1 { "Send 1" };
-    TextButton btEffectSendLine2 { "2" };
     TextButton btEffectSendLine3 { "Send 3" };
-    TextButton btEffectSendLine4 { "4" };
 
     Label lblEffectSendLvl;
     Label lblEffectSendVel;
     Label lblEffectSendScl;
     FiltreControlLookAndFeel effectSendKnobLF;
 
-    static constexpr int outputGroupRowH = 18;
-    static constexpr int effectSendInnerGap = 2;
-    static constexpr int effectSendLblH = 10;
-    static constexpr int effectSendKnobSz = 22;
+    static constexpr int outputGroupRowH = MixerLayout::rowH;
+    static constexpr int effectSendInnerGap = MixerLayout::rowGap;
     static constexpr int effectSendBlockH = kEffectSendBlockH;
 
     Slider effectSendLevelPh;
@@ -718,7 +763,10 @@ public:
     void attachStripLevelControl (int stripIndex, MidiSlider& liveLevel)
     {
         if (auto* strip = getStrip (stripIndex))
+        {
             strip->attachLiveLevelControl (liveLevel);
+            strip->resized();
+        }
     }
 
     void attachStripNoteLimitLowControl (int stripIndex, MidiSlider& liveNoteLimitLow)
@@ -829,9 +877,10 @@ public:
 
     void resized() override
     {
-        const int rowH = 18;
-        const int gap = 2;
-        const int headerH = 20;
+        const int rowH = MixerLayout::rowH;
+        const int gap = MixerLayout::rowGap;
+        const int headerH = MixerLayout::headerH;
+        const int contentH = preferredHeight();
 
         int visibleCount = 0;
         for (auto* strip : { &strip1, &strip2, &strip3, &strip4 })
@@ -853,7 +902,8 @@ public:
             if (! strip->isVisible())
                 continue;
 
-            strip->setBounds (xStrip, 0, stripColW, getHeight());
+            strip->setBounds (xStrip, 0, stripColW, contentH);
+            strip->resized();
             xStrip += stripColW + stripGap;
         }
 
@@ -868,10 +918,7 @@ public:
 
     static int preferredHeight()
     {
-        const int rowH = 18;
-        const int gap = 2;
-        const int headerH = 20;
-        return headerH + (numRows - 1) * (rowH + gap) + MixerElementStrip::kEffectSendBlockH;
+        return MixerElementStrip::preferredContentHeight();
     }
 
 private:

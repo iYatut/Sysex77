@@ -1,3 +1,4 @@
+import type { Addr } from '../types/paramMeta';
 import type { LogMatchStatus, LogRowOverlay, ParamValueMap, ParamValueMapRow } from '../types/paramValueMap';
 
 export type ParsedLogLine = {
@@ -33,6 +34,75 @@ function rawFromSysexBytes(bytes: number[]): number | null {
   }
 
   return null;
+}
+
+export function sysexHexToBytes(sysexHex: string): number[] {
+  const tokens = normalizeSysexHex(sysexHex).split(/\s+/).filter(Boolean);
+  const bytes: number[] = [];
+  for (const token of tokens) {
+    const byte = parseHexToken(token);
+    if (byte !== null) {
+      bytes.push(byte);
+    }
+  }
+  return bytes;
+}
+
+/** Payload `43 … 34 …` без обёртки F0/F7. */
+export function sysexParamChangeDataBytes(sysexHex: string): number[] {
+  const bytes = sysexHexToBytes(sysexHex);
+  if (bytes.length === 0) {
+    return bytes;
+  }
+
+  const f0Index = bytes[0] === 0xf0 ? 0 : -1;
+  const dataStart = f0Index >= 0 ? 1 : 0;
+  const dataEnd =
+    f0Index >= 0 && bytes[bytes.length - 1] === 0xf7 ? bytes.length - 1 : bytes.length;
+
+  return bytes.slice(dataStart, dataEnd);
+}
+
+/** Для per-element: b4 = elementIndex × 0x20 в кадре `F0 43 10 34 …`. */
+export function remapSysexHexForElement(sysexHex: string, elementIndex: number): string {
+  const bytes = sysexHexToBytes(sysexHex);
+  const data = sysexParamChangeDataBytes(sysexHex);
+  if (bytes.length === 0 || data.length < 5 || data[0] !== 0x43 || data[2] !== 0x34) {
+    return sysexHex;
+  }
+
+  const expectedB4 = (elementIndex & 0x7f) * 0x20;
+  const out = [...bytes];
+  const b4Index = bytes[0] === 0xf0 ? 5 : 4;
+  if (b4Index < out.length) {
+    out[b4Index] = expectedB4;
+  }
+
+  return out.map((b) => b.toString(16).padStart(2, '0').toUpperCase()).join(' ');
+}
+
+/** Кадр `43 … 34 b3 b4 b5 b6 … VV` относится к параметру и element. */
+export function logLineMatchesParamAddress(
+  line: ParsedLogLine,
+  addr: Addr,
+  elementIndex: number,
+  perElement: boolean,
+): boolean {
+  const bytes = sysexParamChangeDataBytes(line.sysexHex);
+  if (bytes.length < 9 || bytes[0] !== 0x43 || bytes[2] !== 0x34) {
+    return false;
+  }
+
+  if (bytes[3] !== addr.b3 || bytes[5] !== addr.b5 || bytes[6] !== addr.b6) {
+    return false;
+  }
+
+  if (perElement) {
+    const expectedB4 = (elementIndex & 0x7f) * 0x20;
+    return bytes[4] === expectedB4;
+  }
+
+  return bytes[4] === addr.b4;
 }
 
 function parseHexToken(token: string): number | null {
@@ -89,12 +159,15 @@ export function parseSysexLogLine(line: string, lineIndex: number): ParsedLogLin
   let trailingLabel: string | undefined;
 
   if (tailPart) {
-    const tailNumbers = tailPart.match(/-?\d+/g);
-    if (tailNumbers && tailNumbers.length > 0) {
-      const last = Number.parseInt(tailNumbers[tailNumbers.length - 1], 10);
-      if (!Number.isNaN(last)) {
-        raw = last;
-        trailingLabel = tailPart;
+    trailingLabel = tailPart;
+    // Число в хвосте — подпись/ui, не подменяем raw из байта SysEx (иначе импорт ≠ кадр).
+    if (raw === null) {
+      const tailNumbers = tailPart.match(/-?\d+/g);
+      if (tailNumbers && tailNumbers.length > 0) {
+        const last = Number.parseInt(tailNumbers[tailNumbers.length - 1], 10);
+        if (!Number.isNaN(last)) {
+          raw = last;
+        }
       }
     }
   }
@@ -104,6 +177,127 @@ export function parseSysexLogLine(line: string, lineIndex: number): ParsedLogLin
   }
 
   return { lineIndex, logIndex, sysexHex, raw, trailingLabel };
+}
+
+export type LogDuplicateReason = 'duplicateSysex' | 'duplicateLogIndex';
+
+export type LogRawConflict = {
+  raw: number;
+  keptLineIndex: number;
+  droppedLineIndex: number;
+  keptSysexHex: string;
+  droppedSysexHex: string;
+};
+
+export type LogDuplicateEntry = {
+  line: ParsedLogLine;
+  reason: LogDuplicateReason;
+  firstSeenLineIndex: number;
+};
+
+/** Один raw — разные SysEx (подмена при импорте «последняя строка победила»). */
+export function findLogRawConflicts(logLines: ParsedLogLine[]): LogRawConflict[] {
+  const byRaw = new Map<number, ParsedLogLine>();
+  const conflicts: LogRawConflict[] = [];
+
+  for (const line of logLines) {
+    const prev = byRaw.get(line.raw);
+    if (prev === undefined) {
+      byRaw.set(line.raw, line);
+      continue;
+    }
+    if (prev.sysexHex === line.sysexHex) {
+      continue;
+    }
+    conflicts.push({
+      raw: line.raw,
+      keptLineIndex: prev.lineIndex,
+      droppedLineIndex: line.lineIndex,
+      keptSysexHex: prev.sysexHex,
+      droppedSysexHex: line.sysexHex,
+    });
+  }
+
+  return conflicts;
+}
+
+/** Повторы в журнале (двойной щелчок, повтор [#N] или тот же SysEx). */
+export function findLogDuplicates(logLines: ParsedLogLine[]): LogDuplicateEntry[] {
+  const duplicates: LogDuplicateEntry[] = [];
+  const seenSysex = new Map<string, number>();
+  const seenLogIndex = new Map<number, number>();
+
+  for (const line of logLines) {
+    if (line.logIndex !== undefined) {
+      const first = seenLogIndex.get(line.logIndex);
+      if (first !== undefined) {
+        duplicates.push({
+          line,
+          reason: 'duplicateLogIndex',
+          firstSeenLineIndex: first,
+        });
+      } else {
+        seenLogIndex.set(line.logIndex, line.lineIndex);
+      }
+    }
+
+    const firstHex = seenSysex.get(line.sysexHex);
+    if (firstHex !== undefined) {
+      duplicates.push({
+        line,
+        reason: 'duplicateSysex',
+        firstSeenLineIndex: firstHex,
+      });
+    } else {
+      seenSysex.set(line.sysexHex, line.lineIndex);
+    }
+  }
+
+  return duplicates;
+}
+
+export function duplicateReasonLabel(reason: LogDuplicateReason): string {
+  switch (reason) {
+    case 'duplicateLogIndex':
+      return 'повтор [#N]';
+    case 'duplicateSysex':
+      return 'тот же SysEx';
+    default:
+      return reason;
+  }
+}
+
+/** Оставляет в тексте журнала только первое вхождение каждого кадра SysEx. */
+export function dedupeLogText(text: string): { text: string; removedCount: number } {
+  const lines = text.split(/\r?\n/);
+  const kept: string[] = [];
+  const seenSysex = new Set<string>();
+  let removedCount = 0;
+
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i];
+    const parsed = parseSysexLogLine(line, i);
+
+    if (!parsed) {
+      if (line.trim().length > 0) {
+        kept.push(line);
+      }
+      continue;
+    }
+
+    if (seenSysex.has(parsed.sysexHex)) {
+      removedCount += 1;
+      continue;
+    }
+
+    seenSysex.add(parsed.sysexHex);
+    kept.push(line);
+  }
+
+  return {
+    text: kept.join('\n'),
+    removedCount,
+  };
 }
 
 export function parseSysexLogText(text: string): ParsedLogLine[] {

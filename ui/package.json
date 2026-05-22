@@ -8,7 +8,9 @@
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "generate:types": "node scripts/generate-param-types.mjs"
+    "generate:types": "node scripts/generate-param-types.mjs",
+    "export:catalog": "node scripts/export-param-catalog.mjs",
+    "validate:catalog": "node scripts/export-param-catalog.mjs && node scripts/check-params-meta-duplicates.mjs fixtures/paramCatalog.json"
   },
   "dependencies": {
     "react": "^19.2.6",

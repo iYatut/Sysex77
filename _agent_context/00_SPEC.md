@@ -1,6 +1,6 @@
 ﻿# SY99 Editor — Agent Specification
 
-Главная точка входа для агента: прочитать этот файл первым, затем **`02_sysex_format.md`**, **`01_code_map.md`**, **`03_parameter_map.csv`**, **`05_missing_audit.md`**, **`sy99_sysex_complete.md`**, при работе с логами — **`04_observed_logs.md`** и **`Sysex77-master/Source/MIDI_MAP_OBSERVATIONS.md`**.
+Главная точка входа для агента: прочитать этот файл первым, затем **`02_sysex_format.md`**, **`01_code_map.md`**, **`03_parameter_map.csv`**, **`05_missing_audit.md`**, **`sy99_sysex_complete.md`**, для bulk dump/request — **`sy99_bulk_dump_request.md`**, при работе с логами — **`04_observed_logs.md`** и **`Sysex77-master/Source/MIDI_MAP_OBSERVATIONS.md`**.
 
 ## Project Goal
 
@@ -108,5 +108,6 @@ When the user explicitly wants a **web/JS** mirror editor, spawn a **separate** 
 | `05_missing_audit.md` | CSV ↔ code coverage + Group A/B |
 | `06_agent_prompts.md` | Step-by-step implementation prompts (C++/JUCE) |
 | `09_confirmed_addresses.md` | **Clean extract** — confirmed SysEx addresses; use instead of `MIDI_MAP_OBSERVATIONS.md` |
-| `sy99_sysex_complete.md` | Long-form SY99 SysEx notes |
+| `sy99_sysex_complete.md` | Long-form SY99 SysEx notes (parameter change) |
+| `sy99_bulk_dump_request.md` | Bulk Dump Request/Response (LM 0040VC/MU/SY/MS), Memory_type/#, auto-dump strategy |
 | `SY99E2_reference.txt` | PDF / manual pointers |

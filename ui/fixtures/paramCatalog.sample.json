@@ -1,0 +1,48 @@
+[
+  {
+    "id": "ELMODE",
+    "groupId": "8101VC",
+    "rawMin": 0,
+    "rawMax": 10,
+    "uiMin": 0,
+    "uiMax": 10,
+    "decode": "enum",
+    "encode": "enum",
+    "enumMap": {
+      "1 AFM MONO": 0,
+      "2 AFM MONO": 1,
+      "4 AFM MONO": 2,
+      "1 AFM POLY": 3,
+      "2 AFM POLY": 4,
+      "1 AWM POLY": 5,
+      "2 AWM POLY": 6,
+      "4 AWM POLY": 7,
+      "1 AFM & 1 AWM POLY": 8,
+      "2 AFM & 2 AWM POLY": 9,
+      "DRUM SET": 10
+    },
+    "sysexTemplate": "F0 43 10 34 00 02 00 00 00 xx F7"
+  },
+  {
+    "id": "ELVL",
+    "groupId": "8101VC",
+    "rawMin": 0,
+    "rawMax": 127,
+    "uiMin": 0,
+    "uiMax": 127,
+    "decode": "identity",
+    "encode": "identity",
+    "sysexTemplate": "F0 43 10 34 00 00 00 00 00 xx F7"
+  },
+  {
+    "id": "ELNS",
+    "groupId": "8101VC",
+    "rawMin": 0,
+    "rawMax": 127,
+    "uiMin": -64,
+    "uiMax": 63,
+    "decode": "signed",
+    "encode": "signed",
+    "sysexTemplate": "F0 43 10 34 00 20 00 00 00 xx F7"
+  }
+]
