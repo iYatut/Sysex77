@@ -11,12 +11,15 @@
 #include "Sy99ParamRegistry.h"
 
 #include "Sy99HardwareMappingRuntime.h"
+#include "Sy99LibraryBulkRead.h"
+#include "Sy99MasterCatalog.h"
 
 #if ! defined (JUCE_DEBUG) && defined (_DEBUG)
  #define JUCE_DEBUG 1
 #endif
 
 #include <cstring>
+#include <functional>
 #include <map>
 #include <set>
 #include <utility>
@@ -175,10 +178,10 @@ namespace Sy99ParamRegistry
               cf (true, true,  false, false, false) },
             { Id::ENLL,     "ENLL",     true,  "Note Limit Low",            "Mixer",
               { 0x03, 0x00, 0x00, 0x03, true  }, 0,  127, identityDecode, identityEncode, {},
-              cf (true, false, false, false, false) },
+              cf (true, true,  false, false, false) },
             { Id::ENLH,     "ENLH",     true,  "Note Limit High",           "Mixer",
               { 0x03, 0x00, 0x00, 0x04, true  }, 0,  127, identityDecode, identityEncode, {},
-              cf (true, false, false, false, false) },
+              cf (true, true,  false, false, false) },
             { Id::EVLL,     "EVLL",     true,  "Velocity Limit Low",        "Mixer",
               { 0x03, 0x00, 0x00, 0x05, true  }, 1,  127, identityDecode, identityEncode, {},
               cf (true, true,  false, false, false) },
@@ -196,10 +199,10 @@ namespace Sy99ParamRegistry
               cf (true, true,  false, false, false) },
             { Id::EFSDVSNS, "EFSDVSNS", true,  "Effect Send Vel Sense",     "Mixer",
               { 0x03, 0x00, 0x00, 0x0B, true  }, 0,  127, decodeEfsdvsns, encodeEfsdvsns, {},
-              cf (true, true,  false, false, false) },
+              cf (true, false, false, false, false) },
             { Id::EFSDSCL,  "EFSDSCL",  true,  "Effect Send Scaling",       "Mixer",
               { 0x03, 0x00, 0x00, 0x0C, true  }, 0,  127, decodeEfsdvsns, encodeEfsdvsns, {},
-              cf (true, true,  false, false, false) },
+              cf (true, false, false, false, false) },
             { Id::EFMODE,   "EFMODE",   false, "Effect Mode",               "Effect",
               { 0x08, 0x00, 0x00, 0x20, false }, 0,    2, identityDecode, identityEncode,
               { "Off", "Serial", "Parallel", nullptr, nullptr, nullptr, nullptr, nullptr,
@@ -840,9 +843,104 @@ namespace Sy99ParamRegistry
             return -1;
         }
 
+        int resolveIntBulkFirst (int liveRaw, int bulk8101Raw, int bulk0040Raw,
+                                 LiveSynthState::ParamSource& src) noexcept
+        {
+            if (bulk8101Raw >= 0)
+            {
+                src = LiveSynthState::ParamSource::Bulk8101;
+                return bulk8101Raw;
+            }
+
+            if (bulk0040Raw >= 0)
+            {
+                src = LiveSynthState::ParamSource::Bulk0040;
+                return bulk0040Raw;
+            }
+
+            if (liveRaw >= 0)
+            {
+                src = LiveSynthState::ParamSource::Live;
+                return liveRaw;
+            }
+
+            src = LiveSynthState::ParamSource::None;
+            return -1;
+        }
+
+        int resolveElnsIntBulkFirst (int liveRaw, int bulk8101Raw, int bulk0040Raw,
+                                     LiveSynthState::ParamSource& src) noexcept
+        {
+            if (elnsBulkSlotPresent (bulk8101Raw))
+            {
+                src = LiveSynthState::ParamSource::Bulk8101;
+                return bulk8101Raw;
+            }
+
+            if (rawSlotPresent (bulk0040Raw))
+            {
+                src = LiveSynthState::ParamSource::Bulk0040;
+                return bulk0040Raw;
+            }
+
+            if (rawSlotPresent (liveRaw))
+            {
+                src = LiveSynthState::ParamSource::Live;
+                return liveRaw;
+            }
+
+            src = LiveSynthState::ParamSource::None;
+            return -1;
+        }
+
+        int resolveEldtIntBulkFirst (int liveRaw, int bulk8101Raw, int bulk0040Raw,
+                                     LiveSynthState::ParamSource& src) noexcept
+        {
+            if (eldtBulkSlotPresent (bulk8101Raw))
+            {
+                src = LiveSynthState::ParamSource::Bulk8101;
+                return bulk8101Raw;
+            }
+
+            if (rawSlotPresent (bulk0040Raw))
+            {
+                src = LiveSynthState::ParamSource::Bulk0040;
+                return bulk0040Raw;
+            }
+
+            if (rawSlotPresent (liveRaw))
+            {
+                src = LiveSynthState::ParamSource::Live;
+                return liveRaw;
+            }
+
+            src = LiveSynthState::ParamSource::None;
+            return -1;
+        }
+
         bool bulkIngestIsAuthoritative (const LiveSynthState& s) noexcept
         {
             return s.hasParsedBulk8101 || s.hasParsedBulk0040;
+        }
+
+        /** E2.. bulk EFSD* not located in 8101VC; mirror E1 bulk for 2-element voices (fixture 03 lcd). */
+        bool efsendEl2SharesEl1Bulk8101 (const LiveSynthState& s) noexcept
+        {
+            return s.lmElmodeRaw >= 0
+                && YamahaLmVoiceDump::maxElnsAnchorSlotsFromElmodeRaw (s.lmElmodeRaw) >= 1;
+        }
+
+        /** OUTSEL E1 @ ELVL+1 shares ELDT byte; anchor E2 OUTSEL is reliable (fixtures 01–03 lcd both/both). */
+        int reconciledOutselE1Bulk8101 (const YamahaLmVoiceDump::Lm8101VcMinimal& p) noexcept
+        {
+            int outselE1 = p.lmOutselE1Raw;
+
+            if (YamahaLmVoiceDump::eldtE1UsesOutselStrip (p.elmodeRaw)
+                && p.lmOutselRaw[1] >= 0
+                && outselE1 != p.lmOutselRaw[1])
+                outselE1 = p.lmOutselRaw[1];
+
+            return outselE1;
         }
 
         bool paramSourceIsPresent (LiveSynthState::ParamSource src) noexcept
@@ -2107,12 +2205,18 @@ namespace Sy99ParamRegistry
 
             case Id::ENLL:
                 if (elementIndex >= 0 && elementIndex < 4)
+                {
                     r.live = &s.elementEnllRaw[(size_t) elementIndex];
+                    r.bulk8101 = &s.lmEnllRaw[(size_t) elementIndex];
+                }
                 break;
 
             case Id::ENLH:
                 if (elementIndex >= 0 && elementIndex < 4)
+                {
                     r.live = &s.elementEnlhRaw[(size_t) elementIndex];
+                    r.bulk8101 = &s.lmEnlhRaw[(size_t) elementIndex];
+                }
                 break;
 
             case Id::EVLL:
@@ -2140,34 +2244,46 @@ namespace Sy99ParamRegistry
                 break;
 
             case Id::EFLN1EL:
-                if (elementIndex == 0)
+                if (elementIndex >= 0 && elementIndex < 4)
                 {
-                    r.live = &s.elementEfsendselRaw[0];
-                    r.bulk8101 = &s.lmEfln1ElRaw;
+                    r.live = &s.elementEfsendselRaw[(size_t) elementIndex];
+
+                    if (elementIndex == 0
+                        || (elementIndex == 1 && efsendEl2SharesEl1Bulk8101 (s)))
+                        r.bulk8101 = &s.lmEfln1ElRaw;
                 }
                 break;
 
             case Id::EFSDLV:
-                if (elementIndex == 0)
+                if (elementIndex >= 0 && elementIndex < 4)
                 {
-                    r.live = &s.elementEfsendlvlRaw[0];
-                    r.bulk8101 = &s.lmEfsdlvRaw;
+                    r.live = &s.elementEfsendlvlRaw[(size_t) elementIndex];
+
+                    if (elementIndex == 0
+                        || (elementIndex == 1 && efsendEl2SharesEl1Bulk8101 (s)))
+                        r.bulk8101 = &s.lmEfsdlvRaw;
                 }
                 break;
 
             case Id::EFSDVSNS:
-                if (elementIndex == 0)
+                if (elementIndex >= 0 && elementIndex < 4)
                 {
-                    r.live = &s.elementEfsdvsnsRaw[0];
-                    r.bulk8101 = &s.lmEfsdvlRaw;
+                    r.live = &s.elementEfsdvsnsRaw[(size_t) elementIndex];
+
+                    if (elementIndex == 0
+                        || (elementIndex == 1 && efsendEl2SharesEl1Bulk8101 (s)))
+                        r.bulk8101 = &s.lmEfsdvlRaw;
                 }
                 break;
 
             case Id::EFSDSCL:
-                if (elementIndex == 0)
+                if (elementIndex >= 0 && elementIndex < 4)
                 {
-                    r.live = &s.elementEfsdsclRaw[0];
-                    r.bulk8101 = &s.lmEfsdsclRaw;
+                    r.live = &s.elementEfsdsclRaw[(size_t) elementIndex];
+
+                    if (elementIndex == 0
+                        || (elementIndex == 1 && efsendEl2SharesEl1Bulk8101 (s)))
+                        r.bulk8101 = &s.lmEfsdsclRaw;
                 }
                 break;
 
@@ -2206,27 +2322,43 @@ namespace Sy99ParamRegistry
         const int bulk0040Raw = readSlot (refs.bulk0040);
 
         int resolved = -1;
+        const bool bulkFirst = bulkIngestIsAuthoritative (s) && s.parameterFrameCount == 0;
+        const int bulk8101Resolved = bulk8101ForResolve (*m, bulk8101Raw);
+        const int bulk0040Resolved = bulk0040ForResolve (*m, bulk0040Raw);
 
         if (id == Id::ELNS)
         {
-            resolved = resolveElnsInt (liveRaw,
-                                       m->confidence.confirmedBulk8101 ? bulk8101Raw : -1,
-                                       bulk0040ForResolve (*m, bulk0040Raw),
-                                       src);
+            if (bulkFirst)
+                resolved = resolveElnsIntBulkFirst (liveRaw,
+                                                    m->confidence.confirmedBulk8101 ? bulk8101Raw : -1,
+                                                    bulk0040Resolved,
+                                                    src);
+            else
+                resolved = resolveElnsInt (liveRaw,
+                                           m->confidence.confirmedBulk8101 ? bulk8101Raw : -1,
+                                           bulk0040Resolved,
+                                           src);
         }
         else if (id == Id::ELDT)
         {
-            resolved = resolveEldtInt (liveRaw,
-                                       m->confidence.confirmedBulk8101 ? bulk8101Raw : -1,
-                                       bulk0040ForResolve (*m, bulk0040Raw),
-                                       src);
+            if (bulkFirst)
+                resolved = resolveEldtIntBulkFirst (liveRaw,
+                                                    m->confidence.confirmedBulk8101 ? bulk8101Raw : -1,
+                                                    bulk0040Resolved,
+                                                    src);
+            else
+                resolved = resolveEldtInt (liveRaw,
+                                           m->confidence.confirmedBulk8101 ? bulk8101Raw : -1,
+                                           bulk0040Resolved,
+                                           src);
+        }
+        else if (bulkFirst)
+        {
+            resolved = resolveIntBulkFirst (liveRaw, bulk8101Resolved, bulk0040Resolved, src);
         }
         else
         {
-            resolved = LiveSynthState::resolveInt (liveRaw,
-                                                   bulk8101ForResolve (*m, bulk8101Raw),
-                                                   bulk0040ForResolve (*m, bulk0040Raw),
-                                                   src);
+            resolved = LiveSynthState::resolveInt (liveRaw, bulk8101Resolved, bulk0040Resolved, src);
         }
 
         {
@@ -2438,20 +2570,21 @@ namespace Sy99ParamRegistry
             s.elmodeRaw = -1;
 
         writeSlot (refsFor (s, Id::WOL, 0).bulk8101, p.wolRaw);
+        const int outselE1Bulk = reconciledOutselE1Bulk8101 (p);
 #if JUCE_DEBUG
         debugWriteElvlSlotImpl (refsFor (s, Id::ELVL, 0).bulk8101, p.elvlE1Raw,
                                 "applyBulk8101FromParsed", 0, "applyBulk", "bulk8101");
-        debugWriteOutselSlotImpl (refsFor (s, Id::OUTSEL, 0).bulk8101, p.lmOutselE1Raw,
+        debugWriteOutselSlotImpl (refsFor (s, Id::OUTSEL, 0).bulk8101, outselE1Bulk,
                                   "applyBulk8101FromParsed", 0, "applyBulk", "bulk8101");
 
-        if (p.lmOutselE1Raw >= 0)
+        if (outselE1Bulk >= 0)
             debugWriteOutselSlotImpl (&s.elementOutselRaw[0], -1,
                                       "applyBulk8101FromParsed", 0, "applyBulk", "live");
 #else
         writeSlot (refsFor (s, Id::ELVL, 0).bulk8101, p.elvlE1Raw);
-        writeSlot (refsFor (s, Id::OUTSEL, 0).bulk8101, p.lmOutselE1Raw);
+        writeSlot (refsFor (s, Id::OUTSEL, 0).bulk8101, outselE1Bulk);
 
-        if (p.lmOutselE1Raw >= 0)
+        if (outselE1Bulk >= 0)
             s.elementOutselRaw[0] = -1;
 #endif
 
@@ -2481,8 +2614,16 @@ namespace Sy99ParamRegistry
         if (p.lmEvlhRaw[0] >= 0)
             s.elementEvlhRaw[0] = -1;
 
+        if (p.lmEnllRaw[0] >= 0)
+            s.elementEnllRaw[0] = -1;
+
+        if (p.lmEnlhRaw[0] >= 0)
+            s.elementEnlhRaw[0] = -1;
+
         writeSlot (refsFor (s, Id::EVLL, 0).bulk8101, p.lmEvllRaw[0]);
         writeSlot (refsFor (s, Id::EVLH, 0).bulk8101, p.lmEvlhRaw[0]);
+        writeSlot (refsFor (s, Id::ENLL, 0).bulk8101, p.lmEnllRaw[0]);
+        writeSlot (refsFor (s, Id::ENLH, 0).bulk8101, p.lmEnlhRaw[0]);
 
         const int eldtUi0 = p.lmEldtRaw[0] >= 0
                                 ? YamahaLmVoiceDump::uiFromElementDetuneSysex (p.lmEldtRaw[0])
@@ -2563,8 +2704,16 @@ namespace Sy99ParamRegistry
             if (p.lmEvlhRaw[e] >= 0)
                 s.elementEvlhRaw[e] = -1;
 
+            if (p.lmEnllRaw[e] >= 0)
+                s.elementEnllRaw[e] = -1;
+
+            if (p.lmEnlhRaw[e] >= 0)
+                s.elementEnlhRaw[e] = -1;
+
             writeSlot (refsFor (s, Id::EVLL, e).bulk8101, p.lmEvllRaw[e]);
             writeSlot (refsFor (s, Id::EVLH, e).bulk8101, p.lmEvlhRaw[e]);
+            writeSlot (refsFor (s, Id::ENLL, e).bulk8101, p.lmEnllRaw[e]);
+            writeSlot (refsFor (s, Id::ENLH, e).bulk8101, p.lmEnlhRaw[e]);
         }
 
 #if JUCE_DEBUG
@@ -4195,6 +4344,557 @@ namespace Sy99ParamRegistry
         }
     }
 #endif
+
+    juce::String dumpCompareStatusToString (DumpCompareStatus status) noexcept
+    {
+        switch (status)
+        {
+            case DumpCompareStatus::Match:    return "MATCH";
+            case DumpCompareStatus::Mismatch: return "MISMATCH";
+            default:                          return "MISSING";
+        }
+    }
+
+    namespace
+    {
+        int rawFromSlot (const int* slot) noexcept
+        {
+            return slot != nullptr ? *slot : -1;
+        }
+
+        juce::String formatMetaAddressHex (const Meta& meta, int elementIndex) noexcept
+        {
+            uint8 b4 = meta.addr.b4;
+
+            if (meta.perElement && elementIndex >= 0 && elementIndex < 4)
+                b4 = (uint8) (elementIndex * 0x20);
+
+            return juce::String::formatted ("%02X %02X %02X %02X",
+                                            (int) meta.addr.b3, (int) b4,
+                                            (int) meta.addr.b5, (int) meta.addr.b6);
+        }
+
+        DumpCompareStatus compareSourcesStatus (int raw8101, int raw0040, int rawLive, int resolved) noexcept
+        {
+            if (resolved < 0 && raw8101 < 0 && raw0040 < 0 && rawLive < 0)
+                return DumpCompareStatus::Missing;
+
+            if (resolved < 0)
+                return DumpCompareStatus::Missing;
+
+            const int sources[] = { raw8101, raw0040, rawLive };
+
+            for (int sourceRaw : sources)
+            {
+                if (sourceRaw >= 0 && sourceRaw != resolved)
+                    return DumpCompareStatus::Mismatch;
+            }
+
+            return DumpCompareStatus::Match;
+        }
+    }
+
+    std::vector<DumpCompareRow> buildDumpCompareRows (const LiveSynthState& s)
+    {
+        std::vector<DumpCompareRow> rows;
+        rows.reserve ((size_t) Id::Count * 2);
+
+        for (size_t i = 0; i < (size_t) Id::Count; ++i)
+        {
+            const Id id = static_cast<Id> (i);
+            const Meta* meta = metaFor (id);
+
+            if (meta == nullptr)
+                continue;
+
+            const int elementCount = meta->perElement ? 4 : 1;
+
+            for (int elementIndex = 0; elementIndex < elementCount; ++elementIndex)
+            {
+                DumpCompareRow row;
+                row.id = id;
+                row.elementIndex = elementIndex;
+                row.group = meta->group != nullptr ? juce::String (meta->group) : juce::String();
+                row.paramTag = meta->tag != nullptr ? juce::String (meta->tag) : metaIdToString (id);
+                row.addressHex = formatMetaAddressHex (*meta, elementIndex);
+
+                const RawRefs refs = refsFor (s, id, elementIndex);
+                row.raw8101 = rawFromSlot (refs.bulk8101);
+                row.raw0040 = rawFromSlot (refs.bulk0040);
+                row.rawLive = rawFromSlot (refs.live);
+
+                LiveSynthState::ParamSource src = LiveSynthState::ParamSource::None;
+                row.resolved = resolveParam (s, id, elementIndex, src);
+                row.status = compareSourcesStatus (row.raw8101, row.raw0040, row.rawLive, row.resolved);
+
+                rows.push_back (row);
+            }
+        }
+
+        return rows;
+    }
+
+    juce::var libraryDumpCompareToJsonVar()
+    {
+        const auto rows = buildDumpCompareRows (getLiveSynthState());
+        juce::Array<juce::var> out;
+
+        for (const auto& row : rows)
+        {
+            auto* obj = new juce::DynamicObject();
+            obj->setProperty ("id", metaIdToString (row.id));
+            obj->setProperty ("elementIndex", row.elementIndex);
+            obj->setProperty ("group", row.group);
+            obj->setProperty ("paramTag", row.paramTag);
+            obj->setProperty ("addressHex", row.addressHex);
+            obj->setProperty ("raw8101", row.raw8101 >= 0 ? juce::var (row.raw8101) : juce::var());
+            obj->setProperty ("raw0040", row.raw0040 >= 0 ? juce::var (row.raw0040) : juce::var());
+            obj->setProperty ("rawLive", row.rawLive >= 0 ? juce::var (row.rawLive) : juce::var());
+            obj->setProperty ("resolved", row.resolved >= 0 ? juce::var (row.resolved) : juce::var());
+            obj->setProperty ("status", dumpCompareStatusToString (row.status));
+            out.add (obj);
+        }
+
+        return out;
+    }
+
+    namespace
+    {
+        struct FixtureVoiceRef
+        {
+            juce::String id;
+            juce::String nameNeedle;
+        };
+
+        const FixtureVoiceRef kFixtureVoices[] = {
+            { "01", "ANONIM" },
+            { "02", "CrsRock" },
+            { "03", "EP:Classic" },
+        };
+
+        juce::String normalizeVoiceName (juce::String name)
+        {
+            return name.trim().toUpperCase().removeCharacters (" \t\r\n");
+        }
+
+        juce::String matchFixtureId (const juce::String& voiceName)
+        {
+            const juce::String norm = normalizeVoiceName (voiceName);
+
+            for (const auto& ref : kFixtureVoices)
+            {
+                if (norm.contains (normalizeVoiceName (ref.nameNeedle)))
+                    return ref.id;
+            }
+
+            return {};
+        }
+
+        int fixtureExpectedUi (const juce::String& fixtureId, Id id, int elementIndex) noexcept
+        {
+            if (fixtureId == "01")
+            {
+                if (id == Id::WOL) return 127;
+                if (id == Id::ELMODE) return 8;
+                if (id == Id::ELVL && elementIndex == 0) return 110;
+                if (id == Id::ELVL && elementIndex == 1) return 127;
+                if (id == Id::ELDT && elementIndex == 0) return 0;
+                if (id == Id::ELDT && elementIndex == 1) return 0;
+            }
+            else if (fixtureId == "02")
+            {
+                if (id == Id::WOL) return 107;
+                if (id == Id::ELMODE) return 8;
+                if (id == Id::ELVL && elementIndex <= 1) return 127;
+                if (id == Id::ELDT && elementIndex == 0) return -1;
+                if (id == Id::ELDT && elementIndex == 1) return 2;
+            }
+            else if (fixtureId == "03")
+            {
+                if (id == Id::WOL) return 110;
+                if (id == Id::ELMODE) return 4;
+                if (id == Id::ELVL && elementIndex <= 1) return 127;
+                if (id == Id::ELDT && elementIndex == 0) return 2;
+                if (id == Id::ELDT && elementIndex == 1) return -2;
+            }
+
+            return -999999;
+        }
+
+        void applyLibraryAutoCheck (LibraryVoiceParamRow& row, const Meta* meta,
+                                      const juce::String& voiceName)
+        {
+            row.autoCheckStatus = "ok";
+            row.fixtureId = matchFixtureId (voiceName);
+
+            if (! row.inDump)
+            {
+                row.autoCheckStatus = "missing";
+                row.autoCheckMessage = "not in dump";
+                return;
+            }
+
+            if (meta != nullptr && row.raw8101 >= 0
+                && meta->decodeRawToUi != nullptr && meta->encodeUiToRaw != nullptr
+                && meta->decodeRawToUi != identityDecode && meta->encodeUiToRaw != identityEncode)
+            {
+                const int ui = decodeRawToUiValue (*meta, row.raw8101);
+
+                if (meta->encodeUiToRaw (ui) != row.raw8101)
+                {
+                    row.autoCheckStatus = "decode";
+                    row.autoCheckMessage = "sysex/UI round-trip mismatch";
+                    return;
+                }
+            }
+
+            if (row.raw8101 >= 0 && row.raw0040 >= 0 && row.raw8101 != row.raw0040)
+            {
+                row.autoCheckStatus = "source";
+                row.autoCheckMessage = "8101 vs 0040 raw differ";
+                return;
+            }
+
+            if (row.fixtureId.isNotEmpty())
+            {
+                const int expected = fixtureExpectedUi (row.fixtureId, row.id, row.elementIndex);
+
+                if (expected != -999999 && row.uiValue != -1 && row.uiValue != expected)
+                {
+                    row.autoCheckStatus = "fixture";
+                    row.autoCheckMessage = "LCD fixture mismatch";
+                    row.expectedUi = expected;
+                    return;
+                }
+            }
+        }
+
+        void populateRegistryDumpFields (LibraryVoiceParamRow& row,
+                                         Id id,
+                                         int elementIndex,
+                                         const LiveSynthState& s,
+                                         const Meta* meta,
+                                         const YamahaLmVoiceDump::Lm8101VcMinimal* parsed8101,
+                                         const YamahaLmVoiceDump::Lm0040VcMinimal* parsed0040,
+                                         const Sy99MasterCatalog::Binding* catalogBinding)
+        {
+            if (meta == nullptr)
+                return;
+
+            const RawRefs refs = refsFor (s, id, elementIndex);
+            int raw8101 = rawFromSlot (refs.bulk8101);
+            int raw0040 = rawFromSlot (refs.bulk0040);
+
+            if (catalogBinding != nullptr && catalogBinding->bulkRead.field.isNotEmpty())
+            {
+                const int parsed8101Sysex = Sy99LibraryBulkRead::readParsed8101FromBinding (
+                    *catalogBinding, elementIndex, parsed8101);
+
+                if (parsed8101Sysex >= 0)
+                    raw8101 = parsed8101Sysex;
+
+                const int parsed0040Sysex = Sy99LibraryBulkRead::readParsed0040FromBinding (
+                    *catalogBinding, parsed0040);
+
+                if (parsed0040Sysex >= 0)
+                    raw0040 = parsed0040Sysex;
+            }
+            else
+            {
+                const int parsed8101Sysex = Sy99LibraryBulkRead::readParsed8101ByRegistryId (
+                    id, elementIndex, parsed8101);
+
+                if (parsed8101Sysex >= 0)
+                    raw8101 = parsed8101Sysex;
+
+                const int parsed0040Sysex = Sy99LibraryBulkRead::readParsed0040ByRegistryId (
+                    id, parsed0040);
+
+                if (parsed0040Sysex >= 0)
+                    raw0040 = parsed0040Sysex;
+            }
+
+            const bool inDump = raw8101 >= 0 || raw0040 >= 0;
+
+            row.raw8101 = raw8101;
+            row.raw0040 = raw0040;
+            row.inDump = inDump;
+
+            LiveSynthState::ParamSource src = LiveSynthState::ParamSource::None;
+            const int resolved = resolveParam (s, id, elementIndex, src);
+
+            if (inDump)
+            {
+                if (id == Id::ELDT || id == Id::ELNS || id == Id::EFSDVSNS || id == Id::EFSDSCL)
+                {
+                    if (raw8101 >= 0 && meta->decodeRawToUi != nullptr)
+                        row.uiValue = decodeRawToUiValue (*meta, raw8101);
+                    else if (raw0040 >= 0 && meta->decodeRawToUi != nullptr)
+                        row.uiValue = decodeRawToUiValue (*meta, raw0040);
+                    else if (resolved >= 0)
+                        row.uiValue = resolved;
+                }
+                else if (resolved >= 0)
+                {
+                    row.uiValue = resolved;
+                }
+                else if (raw8101 >= 0)
+                {
+                    row.uiValue = meta->decodeRawToUi != nullptr
+                                      ? decodeRawToUiValue (*meta, raw8101)
+                                      : raw8101;
+                }
+                else if (raw0040 >= 0)
+                {
+                    row.uiValue = meta->decodeRawToUi != nullptr
+                                      ? decodeRawToUiValue (*meta, raw0040)
+                                      : raw0040;
+                }
+            }
+
+            if (row.uiValue != -1)
+            {
+                const ProgramUiLabel label = programUiLabelForRaw (id, row.uiValue);
+                row.valueLabel = label.label;
+            }
+        }
+
+        void populateRegistryOnlyRows (std::vector<LibraryVoiceParamRow>& rows,
+                                       const LiveSynthState& s,
+                                       bool inDumpOnly,
+                                       const YamahaLmVoiceDump::Lm8101VcMinimal* parsed8101,
+                                       const YamahaLmVoiceDump::Lm0040VcMinimal* parsed0040,
+                                       const juce::String& voiceName)
+        {
+            for (size_t i = 0; i < (size_t) Id::Count; ++i)
+            {
+                const Id id = static_cast<Id> (i);
+                const Meta* meta = metaFor (id);
+
+                if (meta == nullptr)
+                    continue;
+
+                const int elementCount = meta->perElement ? 4 : 1;
+
+                for (int elementIndex = 0; elementIndex < elementCount; ++elementIndex)
+                {
+                    LibraryVoiceParamRow row;
+                    row.paramId = metaIdToString (id);
+                    row.registryId = row.paramId;
+                    row.id = id;
+                    row.elementIndex = elementIndex;
+                    row.group = meta->group != nullptr ? juce::String (meta->group) : juce::String();
+                    row.uiLabel = meta->uiLabel != nullptr ? juce::String (meta->uiLabel) : metaIdToString (id);
+                    row.paramTag = meta->tag != nullptr ? juce::String (meta->tag) : metaIdToString (id);
+                    row.addressHex = formatMetaAddressHex (*meta, elementIndex);
+                    row.bindStatus = "confirmed_live";
+
+                    populateRegistryDumpFields (row, id, elementIndex, s, meta,
+                                                parsed8101, parsed0040, nullptr);
+
+                    if (inDumpOnly && ! row.inDump)
+                        continue;
+
+                    applyLibraryAutoCheck (row, meta, voiceName);
+                    rows.push_back (row);
+                }
+            }
+        }
+    }
+
+    LibraryCatalogStats computeLibraryCatalogStats (const std::vector<LibraryVoiceParamRow>& rows)
+    {
+        LibraryCatalogStats stats;
+        stats.totalRows = (int) rows.size();
+
+        juce::StringArray seenParams;
+
+        for (const auto& row : rows)
+        {
+            if (! seenParams.contains (row.paramId))
+            {
+                seenParams.add (row.paramId);
+                ++stats.catalogParams;
+            }
+
+            if (row.inDump)
+                ++stats.inDump;
+
+            if (row.bindStatus.startsWithIgnoreCase ("confirmed"))
+                ++stats.confirmed;
+            else if (row.bindStatus.startsWithIgnoreCase ("candidate"))
+                ++stats.candidate;
+            else if (row.bindStatus.equalsIgnoreCase ("manual_only") || row.bindStatus.isEmpty())
+                ++stats.manualOnly;
+        }
+
+        return stats;
+    }
+
+    juce::var libraryCatalogStatsToJsonVar (const LibraryCatalogStats& stats)
+    {
+        auto* obj = new juce::DynamicObject();
+        obj->setProperty ("totalRows", stats.totalRows);
+        obj->setProperty ("catalogParams", stats.catalogParams);
+        obj->setProperty ("inDump", stats.inDump);
+        obj->setProperty ("confirmed", stats.confirmed);
+        obj->setProperty ("manualOnly", stats.manualOnly);
+        obj->setProperty ("candidate", stats.candidate);
+        return obj;
+    }
+
+    juce::var libraryGlobalCatalogStatsToJsonVar()
+    {
+        Sy99MasterCatalog::ensureLoaded();
+        const auto& catalog = Sy99MasterCatalog::entries();
+
+        LibraryCatalogStats stats;
+        stats.catalogParams = catalog.size();
+
+        for (const auto& entry : catalog)
+        {
+            const int elementCount = entry.perElement ? entry.elementCount : 1;
+            stats.totalRows += elementCount;
+
+            const juce::String bindStatus = Sy99MasterCatalog::bindStatusFor (entry.id);
+
+            if (bindStatus.startsWithIgnoreCase ("confirmed"))
+                stats.confirmed += elementCount;
+            else if (bindStatus.startsWithIgnoreCase ("candidate"))
+                stats.candidate += elementCount;
+            else
+                stats.manualOnly += elementCount;
+        }
+
+        return libraryCatalogStatsToJsonVar (stats);
+    }
+
+    std::vector<LibraryVoiceParamRow> buildLibraryVoiceParamRows (
+        const LiveSynthState& s,
+        bool inDumpOnly,
+        const YamahaLmVoiceDump::Lm8101VcMinimal* parsed8101,
+        const YamahaLmVoiceDump::Lm0040VcMinimal* parsed0040,
+        const juce::String& voiceName)
+    {
+        std::vector<LibraryVoiceParamRow> rows;
+
+        Sy99MasterCatalog::ensureLoaded();
+        const auto& catalog = Sy99MasterCatalog::entries();
+
+        if (catalog.isEmpty())
+        {
+            rows.reserve ((size_t) Id::Count * 2);
+            populateRegistryOnlyRows (rows, s, inDumpOnly, parsed8101, parsed0040, voiceName);
+            return rows;
+        }
+
+        rows.reserve ((size_t) catalog.size() * 2);
+
+        for (const auto& entry : catalog)
+        {
+            const int elementCount = entry.perElement ? entry.elementCount : 1;
+            const Id registryEnum = entry.registryId.isNotEmpty()
+                                        ? idFromString (entry.registryId)
+                                        : Id::Count;
+            const Meta* meta = registryEnum != Id::Count ? metaFor (registryEnum) : nullptr;
+
+            for (int elementIndex = 0; elementIndex < elementCount; ++elementIndex)
+            {
+                LibraryVoiceParamRow row;
+                row.paramId = entry.id;
+                row.registryId = entry.registryId;
+                row.id = registryEnum;
+                row.elementIndex = elementIndex;
+                row.sysexGroup = entry.sysexGroup;
+                row.group = entry.group;
+                row.uiLabel = entry.uiLabel;
+                row.paramTag = entry.tag;
+                row.addressHex = Sy99MasterCatalog::formatAddressForElement (entry, elementIndex);
+                row.sy99LcdPage = entry.sy99LcdPage;
+                row.bindStatus = Sy99MasterCatalog::bindStatusFor (entry.id);
+
+                if (registryEnum != Id::Count && meta != nullptr)
+                {
+                    Sy99MasterCatalog::Binding catalogBinding;
+                    const Sy99MasterCatalog::Binding* catalogBindingPtr =
+                        Sy99MasterCatalog::tryGetBinding (entry.id, catalogBinding) ? &catalogBinding
+                                                                                    : nullptr;
+
+                    populateRegistryDumpFields (row, registryEnum, elementIndex, s, meta,
+                                                parsed8101, parsed0040, catalogBindingPtr);
+                    applyLibraryAutoCheck (row, meta, voiceName);
+                }
+                else
+                {
+                    row.inDump = false;
+                    row.autoCheckStatus = "missing";
+                    row.autoCheckMessage = "manual_only";
+                }
+
+                if (inDumpOnly && ! row.inDump)
+                    continue;
+
+                rows.push_back (row);
+            }
+        }
+
+        return rows;
+    }
+
+    juce::var libraryVoiceParamRowsToJsonVar (const std::vector<LibraryVoiceParamRow>& rows)
+    {
+        juce::Array<juce::var> out;
+
+        for (const auto& row : rows)
+        {
+            auto* obj = new juce::DynamicObject();
+            const juce::String rowId = row.paramId.isNotEmpty()
+                                           ? row.paramId
+                                           : metaIdToString (row.id);
+            obj->setProperty ("id", rowId);
+            obj->setProperty ("elementIndex", row.elementIndex);
+            obj->setProperty ("sysexGroup", row.sysexGroup);
+            obj->setProperty ("group", row.group);
+            obj->setProperty ("uiLabel", row.uiLabel);
+            obj->setProperty ("paramTag", row.paramTag);
+            obj->setProperty ("addressHex", row.addressHex);
+            obj->setProperty ("bindStatus", row.bindStatus.isNotEmpty() ? row.bindStatus : juce::String ("manual_only"));
+            obj->setProperty ("raw8101", row.raw8101 >= 0 ? juce::var (row.raw8101) : juce::var());
+            obj->setProperty ("raw0040", row.raw0040 >= 0 ? juce::var (row.raw0040) : juce::var());
+            obj->setProperty ("uiValue", row.uiValue != -1 ? juce::var (row.uiValue) : juce::var());
+            obj->setProperty ("valueLabel", row.valueLabel);
+            obj->setProperty ("inDump", row.inDump);
+            obj->setProperty ("autoCheckStatus", row.autoCheckStatus);
+            obj->setProperty ("autoCheckMessage", row.autoCheckMessage);
+
+            if (row.sy99LcdPage > 0)
+                obj->setProperty ("sy99LcdPage", row.sy99LcdPage);
+
+            if (row.registryId.isNotEmpty())
+                obj->setProperty ("registryId", row.registryId);
+
+            if (row.expectedUi != -1)
+                obj->setProperty ("expectedUi", row.expectedUi);
+
+            if (row.fixtureId.isNotEmpty())
+                obj->setProperty ("fixtureId", row.fixtureId);
+
+            out.add (obj);
+        }
+
+        return out;
+    }
+
+    juce::var libraryVoiceParamsToJsonVar (
+        const LiveSynthState& s,
+        bool inDumpOnly,
+        const YamahaLmVoiceDump::Lm8101VcMinimal* parsed8101,
+        const YamahaLmVoiceDump::Lm0040VcMinimal* parsed0040,
+        const juce::String& voiceName)
+    {
+        const auto rows = buildLibraryVoiceParamRows (s, inDumpOnly, parsed8101, parsed0040, voiceName);
+        return libraryVoiceParamRowsToJsonVar (rows);
+    }
 
 } // namespace Sy99ParamRegistry
 

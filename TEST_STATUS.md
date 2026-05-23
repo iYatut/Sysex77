@@ -41,8 +41,8 @@
 | Mixer / Element | ENLH Note Limit High (`03 EE 00 04`, `ELEMENTnNOTELIMITHIGH`, `sliderMixerEl1..4NoteLimitHigh`) | PENDING | PENDING | N/A | PASS | IMPLEMENTED 2026-05-20. UI note names `getMidiNoteName(_,true,true,3)`; TEMP UI default 127 until patch restore; live SY99 test pending. |
 | Mixer / Element | EVLL Velocity Limit Low (`03 EE 00 05`, `ELEMENTnVELOCITYLIMITLOW`, `sliderMixerEl1..4VelocityLimitLow`) | PENDING | PENDING | N/A | PASS | IMPLEMENTED 2026-05-20. UI 0..127; same MidiSlider/valueSysexIn path as ELVL. Live SY99 test pending. |
 | Mixer / Element | EVLH Velocity Limit High (`03 EE 00 06`, `ELEMENTnVELOCITYLIMITHIGH`, `sliderMixerEl1..4VelocityLimitHigh`) | PENDING | PENDING | N/A | PASS | IMPLEMENTED 2026-05-20. UI 0..127; same path as EVLL. Live SY99 test pending. |
-| App lifecycle | Стартовая синхронизация UI ← состояние синта | N/A | N/A | N/A | TODO | Planned feature: patch dump / current patch request on startup. |
-| Diagnostics | Исходящие / трассировка (Debug окно, DBG, FileLogger рядом с exe) | N/A | N/A | N/A | BLOCKED | Диагностика исходящих потоков не доведена до стабильного рабочего потока. |
+| App lifecycle | Стартовая синхронизация UI ← состояние синта | N/A | N/A | TODO | TODO | Implemented: Config «Startup sync on MIDI connect» (default OFF) sends edit-buffer dump request once when In+Out open. Hardware verify pending — see `SYM7_library_sync_progress.md`. |
+| Diagnostics | Исходящие / трассировка (Debug окно, DBG, FileLogger рядом с exe) | N/A | N/A | N/A | TODO | `Sysex77_OUT.log` — служебный лог. **SysEx-only** TX/RX — **`Sysex77_MIDI.log`** рядом с exe (без CC/PC/clock). Путь при старте: `[MidiStream] SysEx-only log: …`. |
 
 ### Test procedure for next item
 

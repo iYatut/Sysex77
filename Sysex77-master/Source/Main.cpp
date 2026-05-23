@@ -12,6 +12,7 @@
 #include "Sy99ControllerTemplateStore.h"
 #include "Sy99HardwareMappingStore.h"
 #include "Sy99HardwareMappingRuntime.h"
+#include "MidiStreamLogger.h"
 inline File getExamplesDirectory() noexcept
 {
 #ifdef PIP_JUCE_EXAMPLES_DIRECTORY
@@ -156,6 +157,8 @@ public:
         diagFileLogger.reset (new juce::FileLogger (logFile, "VNAM OUT diagnostic logging", 0));
         juce::Logger::setCurrentLogger (diagFileLogger.get());
         juce::Logger::writeToLog ("LOGFILE: " + logFile.getFullPathName());
+
+        MidiStreamLogger::beginSession();
 
         Sy99ParamRegistry::initializeMetaRegistryAtStartup();
         Sy99ControllerTemplates::initializeAtStartup();

@@ -11,6 +11,8 @@
 #pragma once
 
 #include "YamahaLmVoiceDump.h"
+#include "Sy99DumpRequest.h"
+#include "DeviceModel.h"
 
 extern juce::File appDirPath; // defined in MidiDemo.h
 
@@ -27,6 +29,90 @@ void debugAuditLiveStateClearParam9 (LiveSynthState& s) noexcept;
 inline juce::File libraryCapturesDirPath() noexcept
 {
     return appDirPath.getChildFile ("captures");
+}
+
+inline juce::File sy99EnsureLibraryCapturesDir() noexcept
+{
+    const juce::File cap = libraryCapturesDirPath();
+
+    if (! cap.exists())
+        cap.createDirectory();
+
+    return cap;
+}
+
+/** Delete .syx outside captures/ and timestamped duplicates in captures/. */
+inline int sy99PruneLegacyLibrarySyxFiles() noexcept
+{
+    int removed = 0;
+
+    if (appDirPath.isDirectory())
+    {
+        juce::Array<juce::File> rootSyx;
+        appDirPath.findChildFiles (rootSyx, juce::File::findFiles, false, "*.syx");
+
+        for (const auto& f : rootSyx)
+            if (f.deleteFile())
+                ++removed;
+    }
+
+    const juce::File cap = libraryCapturesDirPath();
+
+    if (cap.isDirectory())
+    {
+        juce::Array<juce::File> capSyx;
+        cap.findChildFiles (capSyx, juce::File::findFiles, false, "*.syx");
+
+        for (const auto& f : capSyx)
+        {
+            const juce::String name = f.getFileName();
+
+            // Legacy sync/dump names: PREFIX-YYYYMMDD-HHMMSS.syx
+            if (name.containsChar ('-') && name.contains ("-20") && name.endsWithIgnoreCase (".syx"))
+            {
+                if (f.deleteFile())
+                    ++removed;
+            }
+        }
+    }
+
+    return removed;
+}
+
+/** Resolve bank .syx path (supports `captures/AUTOSYNC-….syx` under appDirPath). */
+inline juce::File libraryBankFileFromName (const juce::String& bankFileName) noexcept
+{
+    if (bankFileName.isEmpty())
+        return {};
+
+    juce::File f = appDirPath;
+    juce::String path = bankFileName;
+    path = path.replaceCharacter ('\\', '/');
+
+    while (path.startsWithChar ('/'))
+        path = path.substring (1);
+
+    juce::StringArray parts;
+    parts.addTokens (path, "/", "");
+
+    for (const auto& part : parts)
+        if (part.isNotEmpty())
+            f = f.getChildFile (part);
+
+    return f;
+}
+
+/** When true, request edit-buffer dump once both MIDI In+Out are open. Default OFF. */
+inline bool& sy99StartupSyncOnMidiConnectEnabled() noexcept
+{
+    static bool enabled = false;
+    return enabled;
+}
+
+inline bool& sy99StartupSyncDoneThisSession() noexcept
+{
+    static bool done = false;
+    return done;
 }
 
 /** Parsed live data from the synth (not the editor ValueTree).
@@ -116,6 +202,8 @@ struct LiveSynthState
         memset (lmOutselRaw, -1, sizeof (lmOutselRaw));
         memset (lmEldtRaw, -1, sizeof (lmEldtRaw));
         memset (lmElnsRaw, -1, sizeof (lmElnsRaw));
+        memset (lmEnllRaw, -1, sizeof (lmEnllRaw));
+        memset (lmEnlhRaw, -1, sizeof (lmEnlhRaw));
         memset (lmEvllRaw, -1, sizeof (lmEvllRaw));
         memset (lmEvlhRaw, -1, sizeof (lmEvlhRaw));
         lmEfln1ElRaw = -1;
@@ -412,6 +500,8 @@ struct LiveSynthState
     int lmOutselRaw[4] { -1, -1, -1, -1 };
     int lmEldtRaw[4] { -1, -1, -1, -1 };
     int lmElnsRaw[4] { -1, -1, -1, -1 };
+    int lmEnllRaw[4] { -1, -1, -1, -1 };
+    int lmEnlhRaw[4] { -1, -1, -1, -1 };
     int lmEvllRaw[4] { -1, -1, -1, -1 };
     int lmEvlhRaw[4] { -1, -1, -1, -1 };
     int lmEfln1ElRaw = -1;
@@ -552,6 +642,8 @@ struct LiveSynthState
                             + " elementEnlhRaw[0..3]=" + formatRawArray4 (elementEnlhRaw)
                             + " elementEvllRaw[0..3]=" + formatRawArray4 (elementEvllRaw)
                             + " elementEvlhRaw[0..3]=" + formatRawArray4 (elementEvlhRaw)
+                            + " lmEnllRaw[0..3]=" + formatRawArray4 (lmEnllRaw)
+                            + " lmEnlhRaw[0..3]=" + formatRawArray4 (lmEnlhRaw)
                             + " lmEvllRaw[0..3]=" + formatRawArray4 (lmEvllRaw)
                             + " lmEvlhRaw[0..3]=" + formatRawArray4 (lmEvlhRaw));
 
@@ -742,23 +834,81 @@ inline bool extractBankVoiceFrameSlice (const File& bankFile,
     return true;
 }
 
+/** Parse LM 8101VC + paired 0040VC from library slot into the given state (no synth I/O). */
+inline bool ingestVoiceSlotIntoLiveSynthState (LiveSynthState& state,
+                                               int voiceIndex,
+                                               const juce::File& bankFile,
+                                               const juce::Array<int>& offsets,
+                                               const juce::Array<int>& lengths) noexcept
+{
+    if (! bankFile.existsAsFile())
+    {
+        state.hasParsedBulk8101 = false;
+        state.hasParsedBulk0040 = false;
+        return false;
+    }
+
+    juce::MemoryBlock frame;
+    juce::String failReason;
+
+    if (! extractBankVoiceFrameSlice (bankFile, voiceIndex, offsets, lengths, frame, failReason))
+    {
+        state.hasParsedBulk8101 = false;
+        state.hasParsedBulk0040 = false;
+        return false;
+    }
+
+    if (frame.getSize() < (size_t) YamahaLmVoiceDump::kMin8101VcFrameSize)
+    {
+        state.hasParsedBulk8101 = false;
+        state.hasParsedBulk0040 = false;
+        return false;
+    }
+
+    if (! state.ingestLm8101FromBuffer (frame.getData(), frame.getSize()))
+    {
+        state.hasParsedBulk8101 = false;
+        return false;
+    }
+
+    juce::MemoryBlock bankData;
+
+    if (bankFile.loadFileAsData (bankData))
+    {
+        const auto* bytes = static_cast<const uint8*> (bankData.getData());
+        const int slotOffset = offsets[voiceIndex];
+        const int slotLength = lengths[voiceIndex];
+        int pairedOff = -1;
+        int pairedLen = 0;
+
+        if (YamahaLmVoiceDump::findPaired0040FrameAfter (bytes, bankData.getSize(),
+                                                          slotOffset + slotLength,
+                                                          pairedOff, pairedLen))
+        {
+            state.ingestLm0040FromBuffer (bytes + (size_t) pairedOff, (size_t) pairedLen);
+        }
+    }
+
+    return true;
+}
+
 /** Stage 5: parse LM 8101VC + paired 0040VC from library slot; fills gLiveSynthState (no synth I/O). */
 inline bool ingestLm8101FromBankVoiceSlotAndLog (int voiceIndex,
-                                                 const String& bankFileName,
+                                                 const juce::File& bankFile,
                                                  const Array<int>& offsets,
                                                  const Array<int>& lengths) noexcept
 {
-    if (bankFileName.isEmpty())
+    if (! bankFile.existsAsFile())
     {
         gLiveSynthState.hasParsedBulk8101 = false;
         gLiveSynthState.hasParsedBulk0040 = false;
-        Logger::writeToLog ("[BankClick] parse failed: no bank selected");
+        Logger::writeToLog ("[BankClick] parse failed: bank file missing: "
+                            + bankFile.getFullPathName());
         return false;
     }
 
     MemoryBlock frame;
     String failReason;
-    const File bankFile = appDirPath.getChildFile (bankFileName);
 
     if (! extractBankVoiceFrameSlice (bankFile, voiceIndex, offsets, lengths, frame, failReason))
     {
@@ -778,32 +928,12 @@ inline bool ingestLm8101FromBankVoiceSlotAndLog (int voiceIndex,
         return false;
     }
 
-    const bool ingested8101 = gLiveSynthState.ingestLm8101FromBuffer (frame.getData(), frame.getSize());
-
-    if (! ingested8101)
+    if (! ingestVoiceSlotIntoLiveSynthState (gLiveSynthState, voiceIndex, bankFile, offsets, lengths))
     {
         gLiveSynthState.hasParsedBulk8101 = false;
         Logger::writeToLog ("[BankClick] parse failed: no LM 8101VC in frame (length "
                             + String ((int64) frame.getSize()) + ")");
         return false;
-    }
-
-    MemoryBlock bankData;
-
-    if (bankFile.loadFileAsData (bankData))
-    {
-        const auto* bytes = static_cast<const uint8*> (bankData.getData());
-        const int slotOffset = offsets[voiceIndex];
-        const int slotLength = lengths[voiceIndex];
-        int pairedOff = -1;
-        int pairedLen = 0;
-
-        if (YamahaLmVoiceDump::findPaired0040FrameAfter (bytes, bankData.getSize(),
-                                                          slotOffset + slotLength,
-                                                          pairedOff, pairedLen))
-        {
-            gLiveSynthState.ingestLm0040FromBuffer (bytes + (size_t) pairedOff, (size_t) pairedLen);
-        }
     }
 
     const auto& lm = gLiveSynthState;
@@ -826,13 +956,32 @@ inline bool ingestLm8101FromBankVoiceSlotAndLog (int voiceIndex,
     return true;
 }
 
+inline bool ingestLm8101FromBankVoiceSlotAndLog (int voiceIndex,
+                                                 const String& bankFileName,
+                                                 const Array<int>& offsets,
+                                                 const Array<int>& lengths) noexcept
+{
+    if (bankFileName.isEmpty())
+    {
+        gLiveSynthState.hasParsedBulk8101 = false;
+        gLiveSynthState.hasParsedBulk0040 = false;
+        Logger::writeToLog ("[BankClick] parse failed: no bank selected");
+        return false;
+    }
+
+    return ingestLm8101FromBankVoiceSlotAndLog (voiceIndex,
+                                                libraryBankFileFromName (bankFileName),
+                                                offsets, lengths);
+}
+
 /** Yamaha SY99 bulk / single-voice dump REQUEST — see _agent_context/sy99_bulk_dump_request.md
     (F0 43 2n 7A …, not F0 43 2n 34). Tail bytes (mt/mm/checksum) still need hardware log. */
 inline void sendCurrentVoiceDumpRequestPendingVerification()
 {
-    Logger::writeToLog ("[LiveRead] TODO: dump-request SysEx (F0 43 2n …) not in "
-                        "sy99_sysex_complete.md — need SY99E2.PDF capture or DUMP OUT on synth. "
-                        "Listening for parameter-change stream (F0 43 1n 34 …).");
+    sendSy99VoiceDumpRequest (DeviceModel::getInstance().getSysExDeviceID(),
+                              0x7F,
+                              0x00,
+                              sy99DumpRequestTailMtMmChecksum);
 }
 
 inline void saveLiveReadCaptureToSyx()
@@ -884,6 +1033,26 @@ inline void beginLiveVoiceReadFromSy99()
     Logger::writeToLog ("[SyncFromSY99] Started — SY99: Utility → MIDI → Bulk Dump → 07:1 Voice → "
                         "DUMP OUT, then Stop sync in app.");
     sendCurrentVoiceDumpRequestPendingVerification();
+}
+
+/** One-shot edit-buffer sync when MIDI ports become ready (Config: StartupSyncOnConnect). */
+inline void tryStartupEditBufferSyncFromMidiConnect() noexcept
+{
+    if (! sy99StartupSyncOnMidiConnectEnabled())
+        return;
+
+    if (sy99StartupSyncDoneThisSession())
+        return;
+
+    if (auto& portStatus = sy99MidiPortStatusCallback(); portStatus != nullptr)
+    {
+        if (portStatus().isNotEmpty())
+            return;
+    }
+
+    sy99StartupSyncDoneThisSession() = true;
+    beginLiveVoiceReadFromSy99();
+    juce::Logger::writeToLog ("[StartupSync] Edit-buffer dump request on MIDI connect");
 }
 
 inline bool liveReadPayloadContainsLm8101Tag (const uint8* d, int n) noexcept

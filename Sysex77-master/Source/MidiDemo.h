@@ -49,6 +49,7 @@
 #include "Values.h"
 #include "LiveSynthState.h"
 #include "Sy99HardwareMappingRuntime.h"
+#include "MidiStreamLogger.h"
 
 // Set to 1 for temporary logs: queue sizes per async drain + max consecutive identical SysEx in batch.
 #ifndef SYSEX77_MIDI_MONITOR_DIAGNOSTICS
@@ -90,6 +91,10 @@ static const String oscSendMidiMessage = "/77MidiMessage";
 
 static   StringArray  arrayBank;    //la liste des banques
 static  StringArray arrayListVoices; // liste des voices
+static  StringArray arrayListPreset1Voices;
+static  StringArray arrayListPreset2Voices;
+static  StringArray arrayListMultiIntVoices;
+static  StringArray arrayListMultiPresetVoices;
 // [LIBSYNC] Parsed per-voice SysEx bulk frames inside the selected .syx (F0 … F7 each).
 static Array<int> voiceSysexFileOffsets;
 static Array<int> voiceSysexFileLengths;
@@ -457,6 +462,44 @@ public:
             sendLibraryVoiceRecallToSynth (globalIdx);
         };
 
+        sy99DumpRequestSendCallback() = [this] (const juce::MidiMessage& msg)
+        {
+            if (sy99AnyLibrarySyncActive())
+                sendSysexHardware (msg);
+            else
+                sendRaw (msg.getRawData(), (long) msg.getRawDataSize());
+        };
+
+        Sy99MidiTransport::instance().setSender ([this] (const juce::MidiMessage& msg)
+        {
+            sendSysexHardware (msg);
+        });
+
+        sy99MidiPortStatusCallback() = [this]() -> juce::String
+        {
+            bool inOpen = false;
+            bool outOpen = false;
+
+            for (auto& entry : midiInputs)
+                if (entry->inDevice.get() != nullptr)
+                    inOpen = true;
+
+            for (auto& entry : midiOutputs)
+                if (entry->outDevice.get() != nullptr)
+                    outOpen = true;
+
+            if (! inOpen && ! outOpen)
+                return "MIDI In и Out не открыты — вкладка Midi Setting, выберите порты SY99";
+
+            if (! outOpen)
+                return "MIDI Out не открыт — без него dump request не уйдёт на SY99";
+
+            if (! inOpen)
+                return "MIDI In не открыт — ответ SY99 не будет принят";
+
+            return {};
+        };
+
         voiceTabRecallFromCommonCallback() = [this]
         {
             sendVoiceTabRecallFromCommonEdit();
@@ -548,6 +591,7 @@ public:
                 {
                     Logger::writeToLog ("OUT3 midi send");
                     midiOutput->outDevice->sendMessageNow (m);
+                    MidiStreamLogger::logOutgoing (m, midiOutput->name);
                 }
 
         boolStopReceive = false;
@@ -675,6 +719,8 @@ public:
                 DBG ("MidiDemo::openDevice: open output device for index = " << index << " failed!");
             }
         }
+
+        tryStartupEditBufferSyncFromMidiConnect();
     }
     
     void closeDevice (bool isInput, int index)
@@ -809,15 +855,46 @@ private:
         // This is called on the MIDI thread
         const ScopedLock sl (midiMonitorLock);
 
-        // SysEx bulk capture must run even while outgoing SysEx holds boolStopReceive.
-        if (requestSysex && message.isSysEx())
+        // Library sync: dedicated RX transport (worker thread). Bulk capture: legacy buffer.
+        if (message.isSysEx() && sy99AnyLibrarySyncActive())
+        {
+            Sy99MidiTransport::instance().postReceive (message);
+            sy99ScheduleLibrarySyncAdvanceOnReceive();
+        }
+        else if (requestSysex && message.isSysEx())
         {
             arraySysex.add (message);
             timeOut = 0;
         }
 
+        if (gRequestLiveVoiceRead && message.isSysEx())
+        {
+            notifyLiveVoiceReadActivity();
+            gArrayLiveReadSysex.add (message);
+
+            const int n = message.getSysExDataSize();
+            const uint8* d = message.getSysExData();
+
+            if (n == 9 && d[0] == 0x43 && d[2] == 0x34)
+            {
+                gLiveSynthState.ingestParameterFrame (d[3], d[4], d[5], d[6], d[7], d[8]);
+                Sy99HardwareMappingRuntime::onLiveParameterSysex (d[3], d[4], d[5], d[6], d[8]);
+            }
+            else
+                gLiveSynthState.noteNonParameterMessage (n);
+        }
+
+        if (message.isSysEx())
+        {
+            const juce::String portName = source != nullptr ? source->getName() : juce::String();
+            MidiStreamLogger::logIncoming (message, portName);
+        }
+
         if (boolStopReceive || message.isActiveSense())
             return;
+
+        if (message.isSysEx())
+            handleIncomingLibrarySynthPanelSysex (message);
 
         if (message.isController())
         {
@@ -840,30 +917,16 @@ private:
             });
         }
 
-        if (gRequestLiveVoiceRead && message.isSysEx())
-        {
-            notifyLiveVoiceReadActivity();
-            gArrayLiveReadSysex.add (message);
-
-            const int n = message.getSysExDataSize();
-            const uint8* d = message.getSysExData();
-
-            if (n == 9 && d[0] == 0x43 && d[2] == 0x34)
-            {
-                gLiveSynthState.ingestParameterFrame (d[3], d[4], d[5], d[6], d[7], d[8]);
-                Sy99HardwareMappingRuntime::onLiveParameterSysex (d[3], d[4], d[5], d[6], d[8]);
-            }
-            else
-                gLiveSynthState.noteNonParameterMessage (n);
-        }
-
         if (message.isProgramChange())
         {
             const int pc = message.getProgramChangeNumber();
             const int ch = message.getChannel();
 
             if (ch == 1 && pc >= 0)
-                inboundLibraryProgramSlot() = pc % 16;
+            {
+                inboundLibraryPreviousProgramSlot() = inboundLibraryProgramSlot();
+                inboundLibraryPreviousBankMsb() = inboundLibraryBankMsb();
+            }
 
             juce::MessageManager::callAsync ([pc, ch]
             {
@@ -1079,16 +1142,26 @@ public:
     {
         constexpr int midiCh = 1;
 
-        if (globalIdx < 0 || globalIdx > 63)
+        const auto page = libraryContentPage();
+        const bool isMulti = libraryPageIsMulti (page);
+        const int maxIdx = isMulti ? 15 : 63;
+
+        if (globalIdx < 0 || globalIdx > maxIdx)
         {
-            Logger::writeToLog ("[LIBSYNC] Recall skipped: globalIdx " + String (globalIdx) + " out of range 0…63");
+            Logger::writeToLog ("[LIBSYNC] Recall skipped: globalIdx " + String (globalIdx)
+                                + " out of range 0…" + String (maxIdx));
             return;
         }
 
-        const int bankMsb = globalIdx / 16;
-        const int bankLsb = 0;
-        const int program = globalIdx % 16;
-        const bool fullTriple = libraryRecallNeedsFullTriple (globalIdx);
+        const int bankMsb = isMulti ? 0 : (globalIdx / 16);
+        const int bankLsb = sy99BankLsbForLibraryContentPage (page);
+        const int program = sy99OutboundProgramForLibrarySlot (page, globalIdx);
+        const bool multiCtx = libraryRecallContextBankMsb() == kSy99LibraryRecallMultiContext;
+        const bool fullTriple = isMulti ? ! multiCtx : libraryRecallNeedsFullTriple (globalIdx);
+
+        auto& echo = libraryVoiceProgramChangeEchoGuard();
+        echo.lastGlobalIdx = globalIdx;
+        echo.sentAtMs = juce::Time::getMillisecondCounter();
 
         if (fullTriple)
         {
@@ -1100,7 +1173,10 @@ public:
         pc.setTimeStamp (Time::getMillisecondCounterHiRes() * 0.001);
         sendToOutputs (pc);
 
-        libraryRecallContextBankMsb() = bankMsb;
+        if (! isMulti)
+            libraryRecallContextBankMsb() = bankMsb;
+        else
+            libraryRecallContextBankMsb() = kSy99LibraryRecallMultiContext;
 
         if (fullTriple)
         {
@@ -1119,22 +1195,79 @@ public:
         }
     }
 
-    void sendToOutputs (const MidiMessage& msg)
+    void appendToMidiMonitor (const MidiMessage& message, const char* directionTag)
     {
-        boolStopReceive = true; //shunt the midi in
+        String messageText;
+
+        if (message.isSysEx())
+        {
+            const uint8* d   = message.getSysExData();
+            const int    len = message.getSysExDataSize();
+            messageText << directionTag << " SysEx: ";
+
+            for (int i = 0; i < len; ++i)
+            {
+                if (i > 0)
+                    messageText << ' ';
+
+                messageText << String::toHexString (d[i]).paddedLeft ('0', 2);
+            }
+        }
+        else
+        {
+            messageText << directionTag << ' ' << message.getDescription();
+        }
+
+        messageText << newLine;
+
+        const ScopedLock sl (midiMonitorLock);
+        midiMonitor.insertTextAtCaret (messageText);
+        midiMonitorCharCount += messageText.length();
+        midiMonitor.moveCaretToEnd();
+    }
+
+    /** Thread-safe SysEx out: hardware + file log; monitor update always on UI thread. */
+    void sendSysexHardware (const MidiMessage& msg)
+    {
+        if (! msg.isSysEx())
+            return;
+
+        boolStopReceive = true;
 
         bool sentAny = false;
+        juce::String loggedPort;
 
-        for (auto midiOutput : midiOutputs)
-            if (midiOutput->outDevice.get() != nullptr)
-            {
-                midiOutput->outDevice->sendMessageNow (msg);
-                sentAny = true;
-                Logger::writeToLog("Envoi msg midi");
-                Logger::writeToLog(String(msg.getDescription()) );
-            }
+        {
+            const juce::ScopedLock sl (midiMonitorLock);
 
-        if (! sentAny)
+            for (auto& midiOutput : midiOutputs)
+                if (midiOutput->outDevice.get() != nullptr)
+                {
+                    midiOutput->outDevice->sendMessageNow (msg);
+                    sentAny = true;
+
+                    if (loggedPort.isEmpty())
+                        loggedPort = midiOutput->name;
+                }
+        }
+
+        boolStopReceive = false;
+
+        if (sentAny)
+        {
+            Logger::writeToLog ("[MIDI] TX port=" + loggedPort
+                                + " " + msg.getDescription());
+            MidiStreamLogger::logOutgoing (msg, loggedPort);
+
+            if (juce::MessageManager::existsAndIsCurrentThread())
+                appendToMidiMonitor (msg, "[TX]");
+            else
+                juce::MessageManager::callAsync ([this, msg]
+                {
+                    appendToMidiMonitor (msg, "[TX]");
+                });
+        }
+        else
         {
             static bool loggedNoMidiOut = false;
 
@@ -1145,8 +1278,43 @@ public:
                                     "select your SY99 in MIDI Output list");
             }
         }
+    }
 
-        boolStopReceive = false; //receive unShunt
+    void sendToOutputs (const MidiMessage& msg)
+    {
+        if (msg.isSysEx())
+        {
+            sendSysexHardware (msg);
+            return;
+        }
+
+        boolStopReceive = true;
+
+        bool sentAny = false;
+        juce::String loggedPort;
+
+        {
+            const juce::ScopedLock sl (midiMonitorLock);
+
+            for (auto& midiOutput : midiOutputs)
+                if (midiOutput->outDevice.get() != nullptr)
+                {
+                    midiOutput->outDevice->sendMessageNow (msg);
+                    sentAny = true;
+
+                    if (loggedPort.isEmpty())
+                        loggedPort = midiOutput->name;
+                }
+        }
+
+        if (sentAny)
+        {
+            Logger::writeToLog ("[MIDI] TX port=" + loggedPort
+                                + " " + msg.getDescription());
+            appendToMidiMonitor (msg, "[TX]");
+        }
+
+        boolStopReceive = false;
     }
 
     // THROTTLE DEBOUNCE: called by ThrottleFlushTimer when the throttle window
@@ -1222,7 +1390,8 @@ public:
                 && ! midiOutput->outDevice->getName().containsIgnoreCase (portMatch))
                 continue;
 
-            midiOutput->outDevice->sendMessageNow (MidiMessage::controllerEvent (channel, cc, value));
+            const MidiMessage ccMsg = MidiMessage::controllerEvent (channel, cc, value);
+            midiOutput->outDevice->sendMessageNow (ccMsg);
         }
 
         boolStopReceive = false;

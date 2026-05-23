@@ -73,10 +73,12 @@ public:
 
     /**
      * Returns the SysEx device-ID byte (second byte of Yamaha parameter-change
-     * messages, e.g. 0x10 for unit/channel 1).  The value follows sysexEngine
-     * so it stays consistent with the channel selector in ConfigPage.
+     * messages, e.g. 0x10 for unit/channel 1).  Kept in sync with the channel
+     * selector in ConfigPage.
      */
-    uint8 getSysExDeviceID() const noexcept { return sysexEngine; }
+    uint8 getSysExDeviceID() const noexcept { return sysExDeviceId; }
+
+    void setSysExDeviceID (uint8 id) noexcept { sysExDeviceId = id; }
 
     //==========================================================================
     void addListener    (Listener* l) { listeners.add    (l); }
@@ -87,6 +89,7 @@ private:
     DeviceModel (const DeviceModel&) = delete;
     DeviceModel& operator= (const DeviceModel&) = delete;
 
-    YamahaDevice          currentDevice { YamahaDevice::SY77 };
+    YamahaDevice           currentDevice { YamahaDevice::SY77 };
+    uint8                  sysExDeviceId { 0x10 };
     ListenerList<Listener> listeners;
 };

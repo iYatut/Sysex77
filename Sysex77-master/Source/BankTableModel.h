@@ -12,6 +12,7 @@
 
 #include "../JuceLibraryCode/JuceHeader.h"
 #include "YamahaLmVoiceDump.h"
+#include "Sy99LibrarySession.h"
 #include "VoicesTableModel.h"
 
 //==============================================================================
@@ -26,6 +27,7 @@ public:
         // In your constructor, you should add any child components, and
         // initialise any special settings that your component needs.
         setName ("BANK");
+        sy99PruneLegacyLibrarySyxFiles();
         loadBank();
    
         sourceListBox.setModel (&sourceModel);
@@ -44,8 +46,8 @@ public:
         groupDrop.setVisible(false);
         sourceModel.owner = this;
         sourceModel.addChangeListener(this);
-
-        selectFirstBankAndReload();
+        libraryLoadPersistedSelectionFromDisk();
+        restoreSy99LibrarySessionOnStartup();
     }
 
     ~BankTableModel()
@@ -79,10 +81,133 @@ public:
           doubleClickBank = false;
     }
 
-    void mouseDown (const MouseEvent&) override
+    void mouseDown (const MouseEvent& e) override
     {
-        Logger::writeToLog("Bank Mouse event");
+        if (e.mods.isPopupMenu())
+        {
+            showLibraryClearMenu (this);
+            return;
+        }
+
+        Logger::writeToLog ("Bank Mouse event");
     }
+
+    /** Delete .syx files; returns count removed. */
+    int removeLibrarySyxFiles (bool capturesOnly) noexcept
+    {
+        juce::Array<juce::File> files;
+
+        if (capturesOnly)
+        {
+            const juce::File cap = libraryCapturesDirPath();
+
+            if (cap.isDirectory())
+                cap.findChildFiles (files, juce::File::findFiles, false, "*.syx");
+        }
+        else if (appDirPath.isDirectory())
+        {
+            appDirPath.findChildFiles (files, juce::File::findFiles, true, "*.syx");
+        }
+
+        int removed = 0;
+
+        for (const auto& f : files)
+            if (f.deleteFile())
+                ++removed;
+
+        return removed;
+    }
+
+    void resetLibraryAfterFilePurge() noexcept
+    {
+        clearAllLibraryDisplayState();
+        loadBank();
+        startWithEmptyLibrarySelection();
+        sendChangeMessage();
+    }
+
+    void showLibraryClearMenu (juce::Component* targetComponent)
+    {
+        PopupMenu menu;
+        menu.addItem (1, String::fromUTF8 (u8"Очистить captures/ (sync, dump…)"));
+        menu.addSeparator();
+        menu.addItem (2, String::fromUTF8 (u8"Удалить ВСЕ .syx в библиотеке"));
+
+        menu.showMenuAsync (PopupMenu::Options().withTargetComponent (targetComponent),
+                            [this] (int result)
+        {
+            if (result == 1)
+                confirmAndClearLibrary (true);
+            else if (result == 2)
+                confirmAndClearLibrary (false);
+        });
+    }
+
+    void confirmAndClearLibrary (bool capturesOnly)
+    {
+        const int pending = countLibrarySyxFiles (capturesOnly);
+
+        if (pending == 0)
+        {
+            AlertWindow::showMessageBoxAsync (AlertWindow::InfoIcon,
+                                              String::fromUTF8 (u8"Библиотека"),
+                                              String::fromUTF8 (capturesOnly
+                                                  ? u8"Папка captures/ уже пуста."
+                                                  : u8"Файлов .syx в библиотеке нет."));
+            return;
+        }
+
+        const String detail = String::fromUTF8 (capturesOnly
+            ? u8"Удалить "
+            : u8"Удалить все ")
+            + String (pending)
+            + String::fromUTF8 (capturesOnly
+                ? u8" файлов .syx из captures/?"
+                : u8" файлов .syx из библиотеки (включая captures/)?");
+
+        AlertWindow::showOkCancelBox (AlertWindow::WarningIcon,
+                                      String::fromUTF8 (u8"Очистка библиотеки"),
+                                      detail,
+                                      String::fromUTF8 (u8"Удалить"),
+                                      String::fromUTF8 (u8"Отмена"),
+                                      nullptr,
+                                      ModalCallbackFunction::create ([this, capturesOnly] (int r)
+        {
+            if (r != 1)
+                return;
+
+            const int removed = removeLibrarySyxFiles (capturesOnly);
+            resetLibraryAfterFilePurge();
+            Logger::writeToLog ("[Library] Cleared "
+                                + String (removed) + " .syx file(s)"
+                                + (capturesOnly ? " from captures/" : ""));
+
+            AlertWindow::showMessageBoxAsync (AlertWindow::InfoIcon,
+                                              String::fromUTF8 (u8"Библиотека"),
+                                              String::fromUTF8 (u8"Удалено файлов: ")
+                                                  + String (removed));
+        }));
+    }
+
+    int countLibrarySyxFiles (bool capturesOnly) const noexcept
+    {
+        juce::Array<juce::File> files;
+
+        if (capturesOnly)
+        {
+            const juce::File cap = libraryCapturesDirPath();
+
+            if (cap.isDirectory())
+                cap.findChildFiles (files, juce::File::findFiles, false, "*.syx");
+        }
+        else if (appDirPath.isDirectory())
+        {
+            appDirPath.findChildFiles (files, juce::File::findFiles, true, "*.syx");
+        }
+
+        return files.size();
+    }
+
 
     void changeListenerCallback (ChangeBroadcaster* source) override
     {
@@ -137,6 +262,115 @@ public:
         }
     }
 
+    /** Load internal voice grid from SY-99 session capture (AUTOSYNC-VC-INT). */
+    void reloadSy99InternalVoiceGrid() noexcept
+    {
+        libraryRecallContextBankMsb() = -1;
+
+        if (auto* index = sy99EnsureVoiceCaptureIndex (Sy99LibraryContentPage::internalVoices))
+        {
+            sy99CopyVoiceIndexToInternalArrays (*index);
+            bankSelected = kSy99LibrarySessionBankLabel;
+            Logger::writeToLog ("[SY-99] Internal grid: "
+                              + String (arrayListVoices.size()) + " voice(s)");
+        }
+        else
+        {
+            arrayListVoices.clear();
+            voiceSysexFileOffsets.clear();
+            voiceSysexFileLengths.clear();
+        }
+    }
+
+    /** Select virtual SY-99 row and refresh all library pages from captures. */
+    bool activateSy99LibrarySession() noexcept
+    {
+        sy99RefreshSy99LibrarySessionFromDisk();
+        loadBank();
+
+        if (! sy99LibrarySession().active)
+            return false;
+
+        for (int r = 0; r < arrayBank.size(); ++r)
+        {
+            if (! sy99IsSy99LibrarySessionBankLabel (arrayBank[r]))
+                continue;
+
+            sourceListBox.selectRow (r);
+            rowSelectedBank = r;
+            bankSelected = kSy99LibrarySessionBankLabel;
+            reloadSy99InternalVoiceGrid();
+            sy99RefreshSy99LibraryNamesFromSession();
+            sendChangeMessage();
+            return true;
+        }
+
+        return false;
+    }
+
+    void restoreSy99LibrarySessionOnStartup() noexcept
+    {
+        sy99RefreshSy99LibrarySessionFromDisk();
+        loadBank();
+
+        if (sy99LibrarySession().active)
+        {
+            for (int r = 0; r < arrayBank.size(); ++r)
+            {
+                if (! sy99IsSy99LibrarySessionBankLabel (arrayBank[r]))
+                    continue;
+
+                sourceListBox.selectRow (r);
+                rowSelectedBank = r;
+                bankSelected = kSy99LibrarySessionBankLabel;
+                reloadSy99InternalVoiceGrid();
+                sy99RefreshSy99LibraryNamesFromSession();
+                break;
+            }
+        }
+        else
+        {
+            startWithEmptyLibrarySelection();
+        }
+
+        sourceListBox.updateContent();
+        repaint();
+    }
+
+    /** Empty UI when no SY-99 session and no bank selected. */
+    void startWithEmptyLibrarySelection() noexcept
+    {
+        bankSelected.clear();
+        rowSelectedBank = -1;
+        bankSelectedVoiceIndex = -1;
+        bankSelectedVoiceName.clear();
+        arrayListVoices.clear();
+        voiceSysexFileOffsets.clear();
+        voiceSysexFileLengths.clear();
+        sourceListBox.deselectAllRows();
+        sourceListBox.updateContent();
+        repaint();
+    }
+
+    /** Copy .syx into captures/ and make it the active bank. */
+    bool importSyxFileToCapturesAndActivate (const juce::File& sourceFile) noexcept
+    {
+        if (! sourceFile.existsAsFile())
+            return false;
+
+        const juce::File cap = sy99EnsureLibraryCapturesDir();
+        juce::File dest = cap.getChildFile (sourceFile.getFileName());
+
+        if (dest.existsAsFile())
+            dest = dest.getNonexistentSibling();
+
+        if (! sourceFile.copyFileTo (dest))
+            return false;
+
+        selectBankFileAndReloadVoices (dest);
+        return true;
+    }
+
     /** Rescan library folder; preserve current bank selection (no auto-select of new captures). */
     void reloadAfterLibraryFileAdded()
     {
@@ -166,10 +400,40 @@ public:
         }
     }
 
+    /** Select a .syx in BANK (including captures/) and load voices into A–D tables. */
+    void selectBankFileAndReloadVoices (const File& file)
+    {
+        loadBank();
+
+        int rowToSelect = -1;
+
+        for (int r = 0; r < BankFiles.size(); ++r)
+        {
+            if (BankFiles[r] == file
+                || BankFiles[r].getFullPathName().equalsIgnoreCase (file.getFullPathName()))
+            {
+                rowToSelect = r;
+                break;
+            }
+        }
+
+        if (rowToSelect < 0)
+        {
+            Logger::writeToLog ("[BankLoad] file not indexed: " + file.getFullPathName());
+            sourceListBox.updateContent();
+            repaint();
+            return;
+        }
+
+        sourceListBox.selectRow (rowToSelect);
+        rowSelectedBank = rowToSelect;
+        reloadVoicesFromSelectedBankFile();
+    }
+
     /** Parse F0…F7 frames from the selected bank .syx into arrayListVoices / offset tables. */
     void reloadVoicesFromSelectedBankFile()
     {
-        resetLibraryRecallContext();
+        libraryRecallContextBankMsb() = -1;
 
         arrayListVoices.clear();
         voiceSysexFileOffsets.clear();
@@ -331,7 +595,7 @@ struct SourceItemListboxContents  : public ListBoxModel, public ChangeBroadcaste
         
         int getNumRows() override
         {
-            return maxFiles;
+            return arrayBank.size();
         }
         void change()
         {
@@ -353,7 +617,17 @@ struct SourceItemListboxContents  : public ListBoxModel, public ChangeBroadcaste
                 bankSelected = arrayBank[row];
 
             if (owner != nullptr)
+            {
+                if (sy99IsSy99LibrarySessionBankLabel (bankSelected))
+                {
+                    owner->reloadSy99InternalVoiceGrid();
+                    sy99RefreshSy99LibraryNamesFromSession();
+                    owner->sendChangeMessage();
+                    return;
+                }
+
                 owner->reloadVoicesFromSelectedBankFile();
+            }
         }
 
         void listBoxItemDoubleClicked	(int 	row,const MouseEvent &)	override
@@ -421,9 +695,15 @@ struct SourceItemListboxContents  : public ListBoxModel, public ChangeBroadcaste
             g.drawFittedText (TRANS("Librairie"), getLocalBounds().reduced (20, 0), Justification::centred, 1);
         }
         
-        void mouseDown (const MouseEvent&) override
+        void mouseDown (const MouseEvent& e) override
         {
-          Logger::writeToLog("BankTableModel -> clicked");
+            if (e.mods.isPopupMenu())
+            {
+                owner.showLibraryClearMenu (this);
+                return;
+            }
+
+            Logger::writeToLog ("BankTableModel -> clicked");
         }
 
         
@@ -465,41 +745,31 @@ struct SourceItemListboxContents  : public ListBoxModel, public ChangeBroadcaste
     
     void filesDropped (const StringArray& files, int /*x*/, int /*y*/) override
     {
-        Logger::writeToLog("fileDropped");
-        Logger::writeToLog( "Files dropped: " + files.joinIntoString ("\n"));
-        groupDrop.setVisible(false);
-        File file(files.joinIntoString("\n"));
-        String str = appDirPath.getFullPathName();
-        str = str + "/";
-        file.copyFileTo(str);
-            Logger::writeToLog("FilesDropped: copy files OK");
- //       void MyClass::importAudioFile(File audioFile)
-        File audioFile;
-        for(int i = 0; i < files.size(); i++)
+        Logger::writeToLog ("fileDropped");
+        groupDrop.setVisible (false);
+
+        juce::File lastImported;
+
+        for (int i = 0; i < files.size(); ++i)
         {
-            audioFile = files[i];
-            if (audioFile.exists())
+            const juce::File audioFile (files[i]);
+
+            if (audioFile.existsAsFile() && audioFile.hasFileExtension ("syx"))
             {
-                //create a new file based on the imported file's name and the path of the working directory
-                File audioFileCopy (appDirPath.getFullPathName() + "/" + audioFile.getFileName());
-                
-                if (audioFileCopy.existsAsFile() == false) //if it doesn't yet exist...
-                {
-                    //...copy the imported audio file into the newly created file
-                    audioFile.copyFileTo(audioFileCopy);
-                }
-                else if (audioFileCopy.existsAsFile() == true && audioFile.hasIdenticalContentTo(audioFileCopy) == false)
-                    //if the file already exists (in terms of file name) but they aren't the same file in terms of content...
-                {
-                    //... copy the imported file but with different name
-                    audioFileCopy = audioFileCopy.getNonexistentSibling();
-                    audioFile.copyFileTo(audioFileCopy);
-                }
-                
+                const juce::File cap = sy99EnsureLibraryCapturesDir();
+                juce::File dest = cap.getChildFile (audioFile.getFileName());
+
+                if (dest.existsAsFile() && ! dest.hasIdenticalContentTo (audioFile))
+                    dest = dest.getNonexistentSibling();
+
+                if (audioFile.copyFileTo (dest))
+                    lastImported = dest;
             }
-                //else, the imported file already exists in the directory so no new files need to be added
         }
-         loadBank();
+
+        if (lastImported.existsAsFile())
+            selectBankFileAndReloadVoices (lastImported);
+
         repaint();
     }
 
@@ -509,20 +779,60 @@ struct SourceItemListboxContents  : public ListBoxModel, public ChangeBroadcaste
     {
         arrayBank.clear();
         BankFiles.clear();
-        if(!appDirPath.exists())
+
+        if (! appDirPath.exists())
         {
             appDirPath.createDirectory();
-            
-            Logger::writeToLog("Creation du dossier de presets");
-            Logger::writeToLog(appDirPath.getFullPathName());
-            
+            Logger::writeToLog ("Creation du dossier de presets");
+            Logger::writeToLog (appDirPath.getFullPathName());
         }
- 
-        //  appDirPath.findChildFiles(BankFiles, TypeOfFileToFind::findFiles, true, "someName");
-        
-        appDirPath.findChildFiles(BankFiles, File::TypesOfFileToFind::findFiles
-                                  , false, "*.syx");
-        numRows=BankFiles.size();
+
+        sy99RefreshSy99LibrarySessionFromDisk();
+
+        juce::Array<juce::File> userImports;
+        const juce::File cap = sy99EnsureLibraryCapturesDir();
+
+        if (cap.isDirectory())
+        {
+            juce::Array<juce::File> capFiles;
+            cap.findChildFiles (capFiles, File::findFiles, false, "*.syx");
+
+            for (const auto& f : capFiles)
+            {
+                if (! sy99IsCanonicalAutoloadCaptureFileName (f.getFileName()))
+                    userImports.add (f);
+            }
+        }
+
+        struct BankFileNewestFirstComparator
+        {
+            static int compareElements (const File& a, const File& b)
+            {
+                const int64 ta = a.getLastModificationTime().toMilliseconds();
+                const int64 tb = b.getLastModificationTime().toMilliseconds();
+
+                if (ta > tb) return -1;
+                if (ta < tb) return 1;
+                return 0;
+            }
+        };
+
+        BankFileNewestFirstComparator bankFileSort;
+        userImports.sort (bankFileSort);
+
+        if (sy99LibrarySession().active)
+        {
+            arrayBank.add (kSy99LibrarySessionBankLabel);
+            BankFiles.add (sy99LibrarySession().voiceInternal);
+        }
+
+        for (const auto& f : userImports)
+        {
+            BankFiles.add (f);
+            arrayBank.add (f.getRelativePathFrom (appDirPath).replaceCharacter ('\\', '/'));
+        }
+
+        numRows = arrayBank.size();
         
         //Verifier si il s'agit bien d'une BANK YAMAHA SY
         
@@ -556,12 +866,11 @@ struct SourceItemListboxContents  : public ListBoxModel, public ChangeBroadcaste
         //Construction des DATA
         XmlElement* xData = new XmlElement("DATA");
         
-        for (int i = 0; i < numRows  ; ++i)
+        for (int i = 0; i < numRows; ++i)
         {
             XmlElement* giraffe = new XmlElement ("ITEM");
             giraffe->setAttribute ("ID", i);
-            giraffe->setAttribute ("BANK", BankFiles[i].getFileName());
-            arrayBank.add( BankFiles[i].getFileName());
+            giraffe->setAttribute ("BANK", arrayBank[i]);
             xData->addChildElement (giraffe);
         }
         bankList.addChildElement(xData);

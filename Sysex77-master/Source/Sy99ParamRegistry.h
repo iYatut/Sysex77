@@ -363,4 +363,85 @@ namespace Sy99ParamRegistry
     bool focusSy99ParameterEditor (Id id, int elementIndex, uint8 sysexDeviceByte,
                                    int rawOverride, juce::String& errorOut) noexcept;
 
+    enum class DumpCompareStatus : uint8
+    {
+        Match,
+        Mismatch,
+        Missing
+    };
+
+    juce::String dumpCompareStatusToString (DumpCompareStatus status) noexcept;
+
+    struct DumpCompareRow
+    {
+        Id               id = Id::Count;
+        int              elementIndex = 0;
+        juce::String     group;
+        juce::String     paramTag;
+        juce::String     addressHex;
+        int              raw8101 = -1;
+        int              raw0040 = -1;
+        int              rawLive = -1;
+        int              resolved = -1;
+        DumpCompareStatus status = DumpCompareStatus::Missing;
+    };
+
+    std::vector<DumpCompareRow> buildDumpCompareRows (const LiveSynthState& s);
+
+    juce::var libraryDumpCompareToJsonVar();
+
+    struct LibraryVoiceParamRow
+    {
+        juce::String     paramId;
+        juce::String     registryId;
+        Id               id = Id::Count;
+        int              elementIndex = 0;
+        int              sysexGroup = 0;
+        juce::String     group;
+        juce::String     uiLabel;
+        juce::String     paramTag;
+        juce::String     addressHex;
+        int              sy99LcdPage = 0;
+        juce::String     bindStatus;
+        int              raw8101 = -1;
+        int              raw0040 = -1;
+        int              uiValue = -1;
+        juce::String     valueLabel;
+        bool             inDump = false;
+        juce::String     autoCheckStatus;
+        juce::String     autoCheckMessage;
+        int              expectedUi = -1;
+        juce::String     fixtureId;
+    };
+
+    struct LibraryCatalogStats
+    {
+        int totalRows = 0;
+        int catalogParams = 0;
+        int inDump = 0;
+        int confirmed = 0;
+        int manualOnly = 0;
+        int candidate = 0;
+    };
+
+    LibraryCatalogStats computeLibraryCatalogStats (const std::vector<LibraryVoiceParamRow>& rows);
+    juce::var libraryCatalogStatsToJsonVar (const LibraryCatalogStats& stats);
+    juce::var libraryGlobalCatalogStatsToJsonVar();
+
+    std::vector<LibraryVoiceParamRow> buildLibraryVoiceParamRows (
+        const LiveSynthState& s,
+        bool inDumpOnly = false,
+        const YamahaLmVoiceDump::Lm8101VcMinimal* parsed8101 = nullptr,
+        const YamahaLmVoiceDump::Lm0040VcMinimal* parsed0040 = nullptr,
+        const juce::String& voiceName = {});
+
+    juce::var libraryVoiceParamsToJsonVar (
+        const LiveSynthState& s,
+        bool inDumpOnly = false,
+        const YamahaLmVoiceDump::Lm8101VcMinimal* parsed8101 = nullptr,
+        const YamahaLmVoiceDump::Lm0040VcMinimal* parsed0040 = nullptr,
+        const juce::String& voiceName = {});
+
+    juce::var libraryVoiceParamRowsToJsonVar (const std::vector<LibraryVoiceParamRow>& rows);
+
 } // namespace Sy99ParamRegistry

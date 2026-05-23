@@ -987,8 +987,13 @@ struct VoicePage   : public Component, public Slider::Listener, public ComboBox:
             LiveSynthState::ParamSource rowSrc = LiveSynthState::ParamSource::None;
             const int elvlRaw = Sy99ParamRegistry::resolveParam (lm, Sy99ParamRegistry::Id::ELVL,
                                                                  el.elementIndex, rowSrc);
-            if (el.elementIndex == 0)
-                Sy99ParamRegistry::debugLogResolvedParam (lm, Sy99ParamRegistry::Id::ELVL, 0, "ELVL1");
+
+            if (el.elementIndex <= 1)
+            {
+                const char* elvlLabel = el.elementIndex == 0 ? "ELVL_E1" : "ELVL_E2";
+                Sy99ParamRegistry::debugLogResolvedParam (lm, Sy99ParamRegistry::Id::ELVL,
+                                                          el.elementIndex, elvlLabel);
+            }
 
             if (elvlRaw < 0 || elvlRaw > 127 || el.slider == nullptr)
                 continue;
@@ -1011,28 +1016,20 @@ struct VoicePage   : public Component, public Slider::Listener, public ComboBox:
 
             if (outselE1 >= 0)
             {
-                const uint8 current = (uint8) (int) sliderMixerEl1Outsel.getValue();
-                const uint8 merged = (uint8) ((current & ~0x06) | ((uint8) outselE1 & 0x06));
+                const int outselUi = (int) ((uint8) outselE1 & 0x06);
 #if JUCE_DEBUG
                 Sy99ParamRegistry::debugLogUiBindingAudit ("sliderMixerEl1Outsel", 0, "resolveParam",
                                                              Sy99ParamRegistry::Id::OUTSEL,
-                                                             outselE1, (int) (outselE1 & 0x06));
-                if ((current & (uint8) ~0x06) != 0)
-                    Sy99ParamRegistry::debugLogUiBindingAudit ("sliderMixerEl1Outsel", 0, "directState",
-                                                               Sy99ParamRegistry::Id::OUTSEL,
-                                                               (int) (current & ~0x06),
-                                                               (int) (merged & ~0x06));
-                Sy99ParamRegistry::debugLogUiBindingAudit ("mixerEl1OutputGroup", 0,
-                                                            (current & (uint8) ~0x06) != 0
-                                                                ? "resolveParam+directState"
-                                                                : "resolveParam",
+                                                             outselE1, outselUi);
+                Sy99ParamRegistry::debugLogUiBindingAudit ("mixerEl1OutputGroup", 0, "resolveParam",
                                                             Sy99ParamRegistry::Id::OUTSEL,
-                                                            outselE1, (int) (merged & 0x06));
+                                                            outselE1, outselUi);
 #endif
-                sliderMixerEl1Outsel.setValue ((double) merged, juce::dontSendNotification);
-                outselLog = " OUTSEL_E1=0x" + String::toHexString ((int) (merged & 0x06)).toUpperCase();
+                sliderMixerEl1Outsel.setValue ((double) outselUi, juce::dontSendNotification);
+                valueTreeVoice.setProperty (IDs::ELEMENT1OUTSEL, outselUi, nullptr);
+                outselLog = " OUTSEL_E1=0x" + String::toHexString (outselUi).toUpperCase();
 #if JUCE_DEBUG
-                outselUiByIdx[0] = (int) (merged & 0x06);
+                outselUiByIdx[0] = outselUi;
 #endif
             }
         }
@@ -1222,79 +1219,89 @@ struct VoicePage   : public Component, public Slider::Listener, public ComboBox:
             if (efmode >= 0)
                 applyResolvedSlider (sliderEfmode, IDs::EFMODE, efmode);
 
-            rowSrc = LiveSynthState::ParamSource::None;
-            const int efln = Sy99ParamRegistry::resolveParam (lm, Sy99ParamRegistry::Id::EFLN1EL, 0, rowSrc);
-
-            if (efln >= 0)
+            struct EfsendApplyRow
             {
-#if JUCE_DEBUG
-                Sy99ParamRegistry::debugLogUiBindingAudit ("sliderMixerEl1Efsendsel", 0, "resolveParam",
-                                                           Sy99ParamRegistry::Id::EFLN1EL, efln, efln);
-                Sy99ParamRegistry::debugLogUiBindingAudit ("mixerEl1EffectSendSelect", 0, "resolveParam",
-                                                           Sy99ParamRegistry::Id::EFLN1EL, efln, efln);
-#endif
-                applyResolvedSlider (sliderMixerEl1Efsendsel, IDs::ELEMENT1EFSENDSEL, efln);
-            }
+                int elementIndex;
+                MidiSlider* sel;
+                MidiSlider* lvl;
+                MidiSlider* vsns;
+                MidiSlider* scl;
+                juce::Identifier selId;
+                juce::Identifier lvlId;
+                juce::Identifier vsnsId;
+                juce::Identifier sclId;
+                const char* selSliderName;
+                const char* lvlSliderName;
+                const char* efsdlvLogLabel;
+            };
 
-#if JUCE_DEBUG
-            Sy99ParamRegistry::debugLogEfsendAuditUi (Sy99ParamRegistry::Id::EFLN1EL, 0,
-                                                    (int) sliderMixerEl1Efsendsel.getValue(), efln);
-#endif
+            const EfsendApplyRow efsendRows[] = {
+                { 0, &sliderMixerEl1Efsendsel, &sliderMixerEl1Efsendlvl,
+                  &sliderMixerEl1Efsendvsns, &sliderMixerEl1Efsendscl,
+                  IDs::ELEMENT1EFSENDSEL, IDs::ELEMENT1EFSENDLVL,
+                  IDs::ELEMENT1EFSENDVSNS, IDs::ELEMENT1EFSENDSCL,
+                  "sliderMixerEl1Efsendsel", "sliderMixerEl1Efsendlvl", "EFSDLV_E1" },
+                { 1, &sliderMixerEl2Efsendsel, &sliderMixerEl2Efsendlvl,
+                  &sliderMixerEl2Efsendvsns, &sliderMixerEl2Efsendscl,
+                  IDs::ELEMENT2EFSENDSEL, IDs::ELEMENT2EFSENDLVL,
+                  IDs::ELEMENT2EFSENDVSNS, IDs::ELEMENT2EFSENDSCL,
+                  "sliderMixerEl2Efsendsel", "sliderMixerEl2Efsendlvl", "EFSDLV_E2" },
+            };
 
-            rowSrc = LiveSynthState::ParamSource::None;
-            const int efsdlv = Sy99ParamRegistry::resolveParam (lm, Sy99ParamRegistry::Id::EFSDLV, 0, rowSrc);
-
-            if (efsdlv >= 0)
+            for (const auto& er : efsendRows)
             {
+                rowSrc = LiveSynthState::ParamSource::None;
+                const int efln = Sy99ParamRegistry::resolveParam (lm, Sy99ParamRegistry::Id::EFLN1EL,
+                                                                  er.elementIndex, rowSrc);
+
+                if (efln >= 0)
+                {
 #if JUCE_DEBUG
-                Sy99ParamRegistry::debugLogUiBindingAudit ("sliderMixerEl1Efsendlvl", 0, "resolveParam",
-                                                           Sy99ParamRegistry::Id::EFSDLV, efsdlv, efsdlv);
+                    Sy99ParamRegistry::debugLogUiBindingAudit (er.selSliderName, er.elementIndex,
+                                                               "resolveParam",
+                                                               Sy99ParamRegistry::Id::EFLN1EL,
+                                                               efln, efln);
 #endif
-                applyResolvedSlider (sliderMixerEl1Efsendlvl, IDs::ELEMENT1EFSENDLVL, efsdlv);
+                    applyResolvedSlider (*er.sel, er.selId, efln);
+                }
+
+                rowSrc = LiveSynthState::ParamSource::None;
+                const int efsdlv = Sy99ParamRegistry::resolveParam (lm, Sy99ParamRegistry::Id::EFSDLV,
+                                                                    er.elementIndex, rowSrc);
+                Sy99ParamRegistry::debugLogResolvedParam (lm, Sy99ParamRegistry::Id::EFSDLV,
+                                                          er.elementIndex, er.efsdlvLogLabel);
+
+                if (efsdlv >= 0)
+                {
+#if JUCE_DEBUG
+                    Sy99ParamRegistry::debugLogUiBindingAudit (er.lvlSliderName, er.elementIndex,
+                                                               "resolveParam",
+                                                               Sy99ParamRegistry::Id::EFSDLV,
+                                                               efsdlv, efsdlv);
+#endif
+                    applyResolvedSlider (*er.lvl, er.lvlId, efsdlv);
+                }
+
+                rowSrc = LiveSynthState::ParamSource::None;
+                const int efsdvl = Sy99ParamRegistry::resolveParam (lm, Sy99ParamRegistry::Id::EFSDVSNS,
+                                                                    er.elementIndex, rowSrc);
+
+                if (efsdvl >= 0)
+                {
+                    const int efsdUi = efsdvsnsUiFromResolved (efsdvl, rowSrc);
+                    applyResolvedSlider (*er.vsns, er.vsnsId, efsdUi);
+                }
+
+                rowSrc = LiveSynthState::ParamSource::None;
+                const int efsdscl = Sy99ParamRegistry::resolveParam (lm, Sy99ParamRegistry::Id::EFSDSCL,
+                                                                     er.elementIndex, rowSrc);
+
+                if (efsdscl >= 0)
+                {
+                    const int sclUi = efsdvsnsUiFromResolved (efsdscl, rowSrc);
+                    applyResolvedSlider (*er.scl, er.sclId, sclUi);
+                }
             }
-
-#if JUCE_DEBUG
-            Sy99ParamRegistry::debugLogEfsendAuditUi (Sy99ParamRegistry::Id::EFSDLV, 0,
-                                                    (int) sliderMixerEl1Efsendlvl.getValue(), efsdlv);
-#endif
-
-            rowSrc = LiveSynthState::ParamSource::None;
-            const int efsdvl = Sy99ParamRegistry::resolveParam (lm, Sy99ParamRegistry::Id::EFSDVSNS, 0, rowSrc);
-
-            if (efsdvl >= 0)
-            {
-                const int efsdUi = efsdvsnsUiFromResolved (efsdvl, rowSrc);
-#if JUCE_DEBUG
-                Sy99ParamRegistry::debugLogUiBindingAudit ("sliderMixerEl1Efsendvsns", 0, "resolveParam",
-                                                           Sy99ParamRegistry::Id::EFSDVSNS,
-                                                           efsdvl, efsdUi);
-#endif
-                applyResolvedSlider (sliderMixerEl1Efsendvsns, IDs::ELEMENT1EFSENDVSNS, efsdUi);
-            }
-
-#if JUCE_DEBUG
-            Sy99ParamRegistry::debugLogEfsendAuditUi (Sy99ParamRegistry::Id::EFSDVSNS, 0,
-                                                    (int) sliderMixerEl1Efsendvsns.getValue(), efsdvl);
-#endif
-
-            rowSrc = LiveSynthState::ParamSource::None;
-            const int efsdscl = Sy99ParamRegistry::resolveParam (lm, Sy99ParamRegistry::Id::EFSDSCL, 0, rowSrc);
-
-            if (efsdscl >= 0)
-            {
-                const int sclUi = efsdvsnsUiFromResolved (efsdscl, rowSrc);
-#if JUCE_DEBUG
-                Sy99ParamRegistry::debugLogUiBindingAudit ("sliderMixerEl1Efsendscl", 0, "resolveParam",
-                                                           Sy99ParamRegistry::Id::EFSDSCL,
-                                                           efsdscl, sclUi);
-#endif
-                applyResolvedSlider (sliderMixerEl1Efsendscl, IDs::ELEMENT1EFSENDSCL, sclUi);
-            }
-
-#if JUCE_DEBUG
-            Sy99ParamRegistry::debugLogEfsendAuditUi (Sy99ParamRegistry::Id::EFSDSCL, 0,
-                                                    (int) sliderMixerEl1Efsendscl.getValue(), efsdscl);
-#endif
         }
 
         Logger::writeToLog ("[SyncFromSY99] applyLiveSynthStateToEditor done: name=\""
@@ -1769,6 +1776,10 @@ void setNombreElements (int nombre)
     MidiSlider  sliderMixerEl1Efsendscl;
     MidiSlider  sliderMixerEl2Level;
     MidiSlider  sliderMixerEl2Outsel;
+    MidiSlider  sliderMixerEl2Efsendsel;
+    MidiSlider  sliderMixerEl2Efsendlvl;
+    MidiSlider  sliderMixerEl2Efsendvsns;
+    MidiSlider  sliderMixerEl2Efsendscl;
     MidiSlider  sliderMixerEl3Level;
     MidiSlider  sliderMixerEl4Level;
     MidiSlider  sliderMixerEl1NoteLimitLow;
@@ -1809,6 +1820,8 @@ void setNombreElements (int nombre)
             || slider == &sliderMixerEl1Outsel || slider == &sliderMixerEl2Outsel
             || slider == &sliderMixerEl1Efsendsel || slider == &sliderMixerEl1Efsendlvl
             || slider == &sliderMixerEl1Efsendvsns
+            || slider == &sliderMixerEl2Efsendsel || slider == &sliderMixerEl2Efsendlvl
+            || slider == &sliderMixerEl2Efsendvsns || slider == &sliderMixerEl2Efsendscl
             || slider == &sliderMixerEl1NoteLimitLow || slider == &sliderMixerEl2NoteLimitLow
             || slider == &sliderMixerEl3NoteLimitLow || slider == &sliderMixerEl4NoteLimitLow
             || slider == &sliderMixerEl1NoteLimitHigh || slider == &sliderMixerEl2NoteLimitHigh
@@ -1858,6 +1871,8 @@ void setNombreElements (int nombre)
             &sliderMixerEl1Level, &sliderMixerEl2Level, &sliderMixerEl3Level, &sliderMixerEl4Level,
             &sliderMixerEl1Outsel, &sliderMixerEl2Outsel,
             &sliderMixerEl1Efsendsel, &sliderMixerEl1Efsendlvl, &sliderMixerEl1Efsendvsns,
+            &sliderMixerEl2Efsendsel, &sliderMixerEl2Efsendlvl, &sliderMixerEl2Efsendvsns,
+            &sliderMixerEl2Efsendscl,
             &sliderMixerEl1NoteLimitLow, &sliderMixerEl2NoteLimitLow,
             &sliderMixerEl3NoteLimitLow, &sliderMixerEl4NoteLimitLow,
             &sliderMixerEl1NoteLimitHigh, &sliderMixerEl2NoteLimitHigh,
@@ -1902,6 +1917,8 @@ void setNombreElements (int nombre)
             &sliderMixerEl1Level, &sliderMixerEl2Level, &sliderMixerEl3Level, &sliderMixerEl4Level,
             &sliderMixerEl1Outsel, &sliderMixerEl2Outsel,
             &sliderMixerEl1Efsendsel, &sliderMixerEl1Efsendlvl, &sliderMixerEl1Efsendvsns,
+            &sliderMixerEl2Efsendsel, &sliderMixerEl2Efsendlvl, &sliderMixerEl2Efsendvsns,
+            &sliderMixerEl2Efsendscl,
             &sliderMixerEl1NoteLimitLow, &sliderMixerEl2NoteLimitLow,
             &sliderMixerEl3NoteLimitLow, &sliderMixerEl4NoteLimitLow,
             &sliderMixerEl1NoteLimitHigh, &sliderMixerEl2NoteLimitHigh,
@@ -2190,6 +2207,10 @@ void setNombreElements (int nombre)
         setupMixerElEfsendSigned7 (sliderMixerEl1Efsendscl, 0x00, 0x0C, IDs::ELEMENT1EFSENDSCL);
         setupMixerElLevel (sliderMixerEl2Level, 0x20, IDs::ELEMENT2VOLUME);
         setupMixerElOutsel (sliderMixerEl2Outsel, 0x20, IDs::ELEMENT2OUTSEL);
+        setupMixerElEfsendsel (sliderMixerEl2Efsendsel, 0x20, IDs::ELEMENT2EFSENDSEL);
+        setupMixerElEfsendlvl (sliderMixerEl2Efsendlvl, 0x20, IDs::ELEMENT2EFSENDLVL);
+        setupMixerElEfsendSigned7 (sliderMixerEl2Efsendvsns, 0x20, 0x0B, IDs::ELEMENT2EFSENDVSNS);
+        setupMixerElEfsendSigned7 (sliderMixerEl2Efsendscl, 0x20, 0x0C, IDs::ELEMENT2EFSENDSCL);
         setupMixerElLevel (sliderMixerEl3Level, 0x40, IDs::ELEMENT3VOLUME);
         setupMixerElLevel (sliderMixerEl4Level, 0x60, IDs::ELEMENT4VOLUME);
         setupMixerElNoteLimitLow (sliderMixerEl1NoteLimitLow, 0x00, IDs::ELEMENT1NOTELIMITLOW);
@@ -2492,13 +2513,23 @@ struct VoiceCommonPage : public Component,
         mixerSection.bindEffectSendSelectForStrip (0, mixerEl1EffectSendSelect,
                                                    voice.sliderMixerEl1Efsendsel,
                                                    &voice.sliderEfmode);
+        mixerSection.bindEffectSendSelectForStrip (1, mixerEl2EffectSendSelect,
+                                                   voice.sliderMixerEl2Efsendsel,
+                                                   &voice.sliderEfmode);
         mixerSection.attachStripEffectSendControls (0,
                                                     voice.sliderMixerEl1Efsendlvl,
                                                     voice.sliderMixerEl1Efsendvsns,
                                                     voice.sliderMixerEl1Efsendscl);
+        mixerSection.attachStripEffectSendControls (1,
+                                                    voice.sliderMixerEl2Efsendlvl,
+                                                    voice.sliderMixerEl2Efsendvsns,
+                                                    voice.sliderMixerEl2Efsendscl);
         voice.sliderMixerEl1Efsendlvl.setPopupDisplayEnabled (true, true, &mixerGroup);
         voice.sliderMixerEl1Efsendvsns.setPopupDisplayEnabled (true, true, &mixerGroup);
         voice.sliderMixerEl1Efsendscl.setPopupDisplayEnabled (true, true, &mixerGroup);
+        voice.sliderMixerEl2Efsendlvl.setPopupDisplayEnabled (true, true, &mixerGroup);
+        voice.sliderMixerEl2Efsendvsns.setPopupDisplayEnabled (true, true, &mixerGroup);
+        voice.sliderMixerEl2Efsendscl.setPopupDisplayEnabled (true, true, &mixerGroup);
 
         syncMixerStripVisibility();
 
@@ -2518,6 +2549,7 @@ struct VoiceCommonPage : public Component,
         mixerEl1OutputGroup.refreshButtonsFromSlider();
         mixerEl2OutputGroup.refreshButtonsFromSlider();
         mixerEl1EffectSendSelect.refreshButtonsFromSlider();
+        mixerEl2EffectSendSelect.refreshButtonsFromSlider();
     }
 
     ~VoiceCommonPage() override
@@ -2769,6 +2801,7 @@ private:
     MixerOutputGroupBinding mixerEl1OutputGroup;
     MixerOutputGroupBinding mixerEl2OutputGroup;
     MixerEffectSendSelectBinding mixerEl1EffectSendSelect;
+    MixerEffectSendSelectBinding mixerEl2EffectSendSelect;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (VoiceCommonPage)
 };

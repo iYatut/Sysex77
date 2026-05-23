@@ -20,6 +20,7 @@ namespace YamahaLmVoiceDump
 {
     constexpr int kLmTagOffsetFromLm = 4;   // "8101VC" / "0040VC" at LM+4
     constexpr int kLm8101VcNameOffset = 33;
+    constexpr int kLm8101MuNameOffset = 32;
     constexpr int kLm8101VcNameLength = 10;
 
     /** ELMODE in LM 8101VC header: same raw 0…10 as parameter change `02 00 00 00` (fixtures 01–03 @+32). */
@@ -326,6 +327,8 @@ namespace YamahaLmVoiceDump
         int lmOutselRaw[4] { -1, -1, -1, -1 };
         int lmEldtRaw[4] { -1, -1, -1, -1 };
         int lmElnsRaw[4] { -1, -1, -1, -1 };
+        int lmEnllRaw[4] { -1, -1, -1, -1 };
+        int lmEnlhRaw[4] { -1, -1, -1, -1 };
         int lmEvllRaw[4] { -1, -1, -1, -1 };
         int lmEvlhRaw[4] { -1, -1, -1, -1 };
         int lmEfln1ElRaw = -1;
@@ -588,21 +591,35 @@ namespace YamahaLmVoiceDump
         return false;
     }
 
-    inline void copyVoiceName (const uint8* frame, int frameSize, char* dest, int destSize) noexcept
+    inline int lm8101NameOffsetForTag (const char* tag6) noexcept
+    {
+        if (tag6 != nullptr && std::memcmp (tag6, "8101MU", 6) == 0)
+            return kLm8101MuNameOffset;
+
+        return kLm8101VcNameOffset;
+    }
+
+    inline void copyLm8101BlockName (const uint8* frame,
+                                     int frameSize,
+                                     const char* tag6,
+                                     char* dest,
+                                     int destSize) noexcept
     {
         if (dest == nullptr || destSize <= 0)
             return;
 
         std::memset (dest, 0, (size_t) destSize);
 
-        if (frame == nullptr || frameSize < kLm8101VcNameOffset + kLm8101VcNameLength)
+        const int nameOff = lm8101NameOffsetForTag (tag6);
+
+        if (frame == nullptr || frameSize < nameOff + kLm8101VcNameLength)
             return;
 
         int n = 0;
 
         for (int i = 0; i < kLm8101VcNameLength && n < destSize - 1; ++i)
         {
-            const uint8 c = frame[kLm8101VcNameOffset + i];
+            const uint8 c = frame[nameOff + i];
             dest[n++] = (char) ((c >= 0x20 && c < 0x7f) ? c : ' ');
         }
 
@@ -610,6 +627,11 @@ namespace YamahaLmVoiceDump
             --n;
 
         dest[n] = '\0';
+    }
+
+    inline void copyVoiceName (const uint8* frame, int frameSize, char* dest, int destSize) noexcept
+    {
+        copyLm8101BlockName (frame, frameSize, "8101VC", dest, destSize);
     }
 
     /** Packed WOL / ELVL E1: prefix `03` or `01` @ i−1, WOL @ i, `00 00` @ i+1…i+2, ELVL E1 @ i+3.
@@ -744,11 +766,13 @@ namespace YamahaLmVoiceDump
 
         const int outselOff = out.elvlE1Offset >= 0 ? out.elvlE1Offset + 1 : -1;
 
-        if (outselOff > 0 && outselOff + 4 < frameSize)
+        if (outselOff > 0 && outselOff + 5 < frameSize)
         {
             out.lmElnsRaw[0] = (int) frame[outselOff + 1];
-            out.lmEvlhRaw[0] = (int) frame[outselOff + 3];
+            out.lmEnllRaw[0] = (int) frame[outselOff + 2];
+            out.lmEnlhRaw[0] = (int) frame[outselOff + 3];
             out.lmEvllRaw[0] = (int) frame[outselOff + 4];
+            out.lmEvlhRaw[0] = (int) frame[outselOff + 5];
 
             if (eldtE1UsesOutselStrip (out.elmodeRaw))
                 out.lmEldtRaw[0] = (int) frame[outselOff];
@@ -764,11 +788,7 @@ namespace YamahaLmVoiceDump
             if (eflnOff >= 0 && eflnOff + kLm8101VcEfsdlvDeltaFromEfln < frameSize)
                 out.lmEfsdlvRaw = (int) frame[eflnOff + kLm8101VcEfsdlvDeltaFromEfln];
 
-            if (eflnOff >= 0 && eflnOff + 3 < frameSize)
-            {
-                out.lmEfsdvlRaw = (int) frame[eflnOff + 2];
-                out.lmEfsdsclRaw = (int) frame[eflnOff + 3];
-            }
+            /* EFSDVSNS / EFSDSCL: not located in 8101VC bulk (live param9 only). */
         }
 
         const int maxElnsAnchors = maxElnsAnchorSlotsFromElmodeRaw (out.elmodeRaw);
@@ -779,7 +799,7 @@ namespace YamahaLmVoiceDump
 
             for (int anchorSlot = 0; anchorSlot < maxElnsAnchors && anchor >= 0; ++anchorSlot)
             {
-                if (anchor + 10 < frameSize)
+                if (anchor + 11 < frameSize)
                 {
                     const int elIdx = 1 + anchorSlot;
 
@@ -787,8 +807,10 @@ namespace YamahaLmVoiceDump
                     {
                         out.lmOutselRaw[elIdx] = (int) (frame[anchor + 4] & 0x06);
                         out.lmElnsRaw[elIdx] = (int) frame[anchor + 7];
-                        out.lmEvlhRaw[elIdx] = (int) frame[anchor + 9];
+                        out.lmEnllRaw[elIdx] = (int) frame[anchor + 8];
+                        out.lmEnlhRaw[elIdx] = (int) frame[anchor + 9];
                         out.lmEvllRaw[elIdx] = (int) frame[anchor + 10];
+                        out.lmEvlhRaw[elIdx] = (int) frame[anchor + 11];
                     }
 
                     if (anchorSlot == 0)
@@ -1257,6 +1279,16 @@ namespace YamahaLmVoiceDump
 
         for (int e = 0; e < 4; ++e)
         {
+            if (p.lmEnllRaw[e] >= 0)
+                s << " ENLL_E" << (e + 1) << "=" << p.lmEnllRaw[e];
+            else
+                s << " ENLL_E" << (e + 1) << "=--";
+
+            if (p.lmEnlhRaw[e] >= 0)
+                s << " ENLH_E" << (e + 1) << "=" << p.lmEnlhRaw[e];
+            else
+                s << " ENLH_E" << (e + 1) << "=--";
+
             if (p.lmEvllRaw[e] >= 0)
                 s << " EVLL_E" << (e + 1) << "=" << p.lmEvllRaw[e];
             else
@@ -1306,6 +1338,12 @@ namespace YamahaLmVoiceDump
 
         for (int e = 0; e < 4; ++e)
         {
+            if (p.lmEnllRaw[e] >= 0)
+                s << " ENLL_E" << (e + 1) << "=" << p.lmEnllRaw[e];
+
+            if (p.lmEnlhRaw[e] >= 0)
+                s << " ENLH_E" << (e + 1) << "=" << p.lmEnlhRaw[e];
+
             if (p.lmEvllRaw[e] >= 0)
                 s << " EVLL_E" << (e + 1) << "=" << p.lmEvllRaw[e];
 
@@ -1440,6 +1478,8 @@ namespace YamahaLmVoiceDump
         static const char* const kOutselFields[] = { "OUTSEL_E1", "OUTSEL_E2", "OUTSEL_E3", "OUTSEL_E4" };
         static const char* const kEldtFields[] = { "ELDT_E1", "ELDT_E2", "ELDT_E3", "ELDT_E4" };
         static const char* const kElnsFields[] = { "ELNS_E1", "ELNS_E2", "ELNS_E3", "ELNS_E4" };
+        static const char* const kEnllFields[] = { "ENLL_E1", "ENLL_E2", "ENLL_E3", "ENLL_E4" };
+        static const char* const kEnlhFields[] = { "ENLH_E1", "ENLH_E2", "ENLH_E3", "ENLH_E4" };
         static const char* const kEvllFields[] = { "EVLL_E1", "EVLL_E2", "EVLL_E3", "EVLL_E4" };
         static const char* const kEvlhFields[] = { "EVLH_E1", "EVLH_E2", "EVLH_E3", "EVLH_E4" };
         static const char* const kElvlOffFields[] = { "elvlOffset_E1", "elvlOffset_E2", "elvlOffset_E3", "elvlOffset_E4" };
@@ -1450,6 +1490,8 @@ namespace YamahaLmVoiceDump
             debugSelfTestLogIntMismatch ("LM8101", kOutselFields[e], fileParsed.lmOutselRaw[e], liveParsed.lmOutselRaw[e], ok);
             debugSelfTestLogIntMismatch ("LM8101", kEldtFields[e], fileParsed.lmEldtRaw[e], liveParsed.lmEldtRaw[e], ok);
             debugSelfTestLogIntMismatch ("LM8101", kElnsFields[e], fileParsed.lmElnsRaw[e], liveParsed.lmElnsRaw[e], ok);
+            debugSelfTestLogIntMismatch ("LM8101", kEnllFields[e], fileParsed.lmEnllRaw[e], liveParsed.lmEnllRaw[e], ok);
+            debugSelfTestLogIntMismatch ("LM8101", kEnlhFields[e], fileParsed.lmEnlhRaw[e], liveParsed.lmEnlhRaw[e], ok);
             debugSelfTestLogIntMismatch ("LM8101", kEvllFields[e], fileParsed.lmEvllRaw[e], liveParsed.lmEvllRaw[e], ok);
             debugSelfTestLogIntMismatch ("LM8101", kEvlhFields[e], fileParsed.lmEvlhRaw[e], liveParsed.lmEvlhRaw[e], ok);
             debugSelfTestLogIntMismatch ("LM8101", kElvlOffFields[e], fileParsed.elvlOffset[e], liveParsed.elvlOffset[e], ok);

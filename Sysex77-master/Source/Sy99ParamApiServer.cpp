@@ -12,6 +12,8 @@
 #include "Sy99HardwareMappingStore.h"
 #include "Sy99HardwareMappingRuntime.h"
 #include "Sy99ParamRegistry.h"
+#include "Sy99LibraryApi.h"
+#include "Sy99LibraryReviewApi.h"
 
 namespace
 {
@@ -113,7 +115,7 @@ namespace
             "HTTP/1.1 " + juce::String (statusCode) + " " + statusText + "\r\n"
             "Content-Type: " + contentType + "\r\n"
             "Access-Control-Allow-Origin: *\r\n"
-            "Access-Control-Allow-Methods: GET, PUT, POST, OPTIONS\r\n"
+            "Access-Control-Allow-Methods: GET, PUT, POST, DELETE, OPTIONS\r\n"
             "Access-Control-Allow-Headers: Content-Type\r\n"
             "Connection: close\r\n"
             "Content-Length: " + juce::String (body.getNumBytesAsUTF8()) + "\r\n"
@@ -286,6 +288,125 @@ namespace
         {
             writeJson (client, 200, Sy99ParamRegistry::currentLiveDumpToJsonVar());
             return;
+        }
+
+        if (req.method == "GET" && req.path.equalsIgnoreCase ("/api/library/dump-compare"))
+        {
+            writeJson (client, 200, Sy99ParamRegistry::libraryDumpCompareToJsonVar());
+            return;
+        }
+
+        if (req.method == "GET" && req.path.equalsIgnoreCase ("/api/library/tree"))
+        {
+            writeJson (client, 200, Sy99LibraryApi::libraryTreeToJsonVar());
+            return;
+        }
+
+        if (req.path.startsWithIgnoreCase ("/api/library/reviews"))
+        {
+            if (req.method == "POST" && req.path.equalsIgnoreCase ("/api/library/reviews"))
+            {
+                juce::String error;
+                const juce::var body = req.body.isNotEmpty() ? juce::JSON::parse (req.body) : juce::var();
+                const juce::var created = Sy99LibraryReviewApi::createReviewFromJsonBody (body, error);
+
+                if (created.isVoid())
+                {
+                    writeJson (client, 400, errorJson (error.isNotEmpty() ? error
+                                                                  : juce::String ("failed to create review")));
+                    return;
+                }
+
+                writeJson (client, 201, created);
+                return;
+            }
+
+            if (req.method == "GET" && req.path.equalsIgnoreCase ("/api/library/reviews"))
+            {
+                writeJson (client, 200, Sy99LibraryReviewApi::listReviewsToJsonVar());
+                return;
+            }
+
+            const juce::String reviewId = Sy99LibraryReviewApi::extractReviewIdFromPath (req.path);
+
+            if (reviewId.isEmpty())
+            {
+                writeJson (client, 404, errorJson ("review not found"));
+                return;
+            }
+
+            if (req.method == "GET")
+            {
+                const juce::var review = Sy99LibraryReviewApi::reviewToJsonVar (reviewId);
+
+                if (review.isVoid())
+                {
+                    writeJson (client, 404, errorJson ("review not found"));
+                    return;
+                }
+
+                writeJson (client, 200, review);
+                return;
+            }
+
+            if (req.method == "DELETE")
+            {
+                juce::String error;
+
+                if (! Sy99LibraryReviewApi::deleteReview (reviewId, error))
+                {
+                    writeJson (client, 404, errorJson (error.isNotEmpty() ? error
+                                                                  : juce::String ("review not found")));
+                    return;
+                }
+
+                writeJson (client, 200, juce::var (new juce::DynamicObject()));
+                return;
+            }
+
+            writeJson (client, 405, errorJson ("method not allowed"));
+            return;
+        }
+
+        if (req.path.equalsIgnoreCase ("/api/library/catalog/stats")
+            && req.method == "GET")
+        {
+            writeJson (client, 200, Sy99ParamRegistry::libraryGlobalCatalogStatsToJsonVar());
+            return;
+        }
+
+        if (req.path.startsWithIgnoreCase ("/api/library/pages/"))
+        {
+            const auto route = Sy99LibraryApi::parseLibraryPagesPath (req.path);
+
+            if (! route.valid)
+            {
+                writeJson (client, 404, errorJson ("unknown library page"));
+                return;
+            }
+
+            if (req.method == "GET" && ! route.isVoiceDetail
+                && req.path.endsWithIgnoreCase ("/voices"))
+            {
+                writeJson (client, 200, Sy99LibraryApi::libraryPageVoicesFromSlug (route.slug));
+                return;
+            }
+
+            if (req.method == "GET" && route.isVoiceDetail)
+            {
+                juce::String error;
+                const juce::var detail = Sy99LibraryApi::libraryVoiceDetailFromSlug (route.slug, route.mm, error);
+
+                if (detail.isVoid())
+                {
+                    writeJson (client, 404, errorJson (error.isNotEmpty() ? error
+                                                                  : juce::String ("voice not found")));
+                    return;
+                }
+
+                writeJson (client, 200, detail);
+                return;
+            }
         }
 
         if (req.method == "POST" && req.path.equalsIgnoreCase ("/api/focus-sy99"))

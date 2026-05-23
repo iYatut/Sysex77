@@ -1,0 +1,403 @@
+[
+  {
+    "id": "ELMODE",
+    "bindStatus": "confirmed_bulk8101",
+    "registryId": "ELMODE",
+    "bulkSource": "8101",
+    "notes": "Sy99ParamRegistry confirmed",
+    "bulkRead": {
+      "frame": "8101",
+      "field": "elmodeRaw"
+    }
+  },
+  {
+    "id": "WOL",
+    "bindStatus": "confirmed_bulk8101",
+    "registryId": "WOL",
+    "bulkSource": "8101",
+    "notes": "Sy99ParamRegistry confirmed",
+    "bulkRead": {
+      "frame": "8101",
+      "field": "wolRaw"
+    }
+  },
+  {
+    "id": "ELVL",
+    "bindStatus": "confirmed_bulk8101",
+    "registryId": "ELVL",
+    "bulkSource": "8101",
+    "notes": "Sy99ParamRegistry confirmed",
+    "bulkRead": {
+      "frame": "8101",
+      "field": "elvlRaw",
+      "perElement": true
+    }
+  },
+  {
+    "id": "ELDT",
+    "bindStatus": "confirmed_bulk8101",
+    "registryId": "ELDT",
+    "bulkSource": "8101",
+    "notes": "Sy99ParamRegistry confirmed",
+    "bulkRead": {
+      "frame": "8101",
+      "field": "lmEldtRaw",
+      "perElement": true
+    }
+  },
+  {
+    "id": "ELNS",
+    "bindStatus": "confirmed_bulk8101",
+    "registryId": "ELNS",
+    "bulkSource": "8101",
+    "notes": "Sy99ParamRegistry confirmed",
+    "bulkRead": {
+      "frame": "8101",
+      "field": "lmElnsRaw",
+      "perElement": true
+    }
+  },
+  {
+    "id": "EVLL",
+    "bindStatus": "confirmed_bulk8101",
+    "registryId": "EVLL",
+    "bulkSource": "8101",
+    "notes": "Sy99ParamRegistry confirmed",
+    "bulkRead": {
+      "frame": "8101",
+      "field": "lmEvllRaw",
+      "perElement": true
+    }
+  },
+  {
+    "id": "EVLH",
+    "bindStatus": "confirmed_bulk8101",
+    "registryId": "EVLH",
+    "bulkSource": "8101",
+    "notes": "Sy99ParamRegistry confirmed",
+    "bulkRead": {
+      "frame": "8101",
+      "field": "lmEvlhRaw",
+      "perElement": true
+    }
+  },
+  {
+    "id": "OUTSEL",
+    "bindStatus": "confirmed_bulk8101",
+    "registryId": "OUTSEL",
+    "bulkSource": "8101",
+    "notes": "Sy99ParamRegistry confirmed",
+    "bulkRead": {
+      "frame": "8101",
+      "field": "lmOutselRaw",
+      "perElement": true
+    }
+  },
+  {
+    "id": "EFLN1EL",
+    "bindStatus": "confirmed_bulk8101",
+    "registryId": "EFLN1EL",
+    "bulkSource": "8101",
+    "notes": "Sy99ParamRegistry confirmed",
+    "bulkRead": {
+      "frame": "8101",
+      "field": "lmEfln1ElRaw",
+      "maxElementIndex": 0
+    }
+  },
+  {
+    "id": "EFSDLV",
+    "bindStatus": "confirmed_bulk8101",
+    "registryId": "EFSDLV",
+    "bulkSource": "8101",
+    "notes": "Sy99ParamRegistry confirmed",
+    "bulkRead": {
+      "frame": "8101",
+      "field": "lmEfsdlvRaw",
+      "maxElementIndex": 0
+    }
+  },
+  {
+    "id": "EFSDVSNS",
+    "bindStatus": "manual_only",
+    "registryId": "EFSDVSNS",
+    "bulkSource": null,
+    "notes": ""
+  },
+  {
+    "id": "EFSDSCL",
+    "bindStatus": "manual_only",
+    "registryId": "EFSDSCL",
+    "bulkSource": null,
+    "notes": ""
+  },
+  {
+    "id": "ENLL",
+    "bindStatus": "confirmed_bulk8101",
+    "registryId": "ENLL",
+    "bulkSource": "8101",
+    "notes": "Sy99ParamRegistry confirmed",
+    "bulkRead": {
+      "frame": "8101",
+      "field": "lmEnllRaw",
+      "perElement": true
+    }
+  },
+  {
+    "id": "ENLH",
+    "bindStatus": "confirmed_bulk8101",
+    "registryId": "ENLH",
+    "bulkSource": "8101",
+    "notes": "Sy99ParamRegistry confirmed",
+    "bulkRead": {
+      "frame": "8101",
+      "field": "lmEnlhRaw",
+      "perElement": true
+    }
+  },
+  {
+    "id": "WPBR",
+    "bindStatus": "confirmed_bulk0040",
+    "registryId": "WPBR",
+    "bulkSource": "0040",
+    "notes": "Sy99ParamRegistry confirmed",
+    "bulkRead": {
+      "frame": "0040",
+      "field": "wpbrRaw"
+    }
+  },
+  {
+    "id": "ATPBR",
+    "bindStatus": "confirmed_bulk0040",
+    "registryId": "ATPBR",
+    "bulkSource": "0040",
+    "notes": "Sy99ParamRegistry confirmed",
+    "bulkRead": {
+      "frame": "0040",
+      "field": "atpbrRaw"
+    }
+  },
+  {
+    "id": "PMASN",
+    "bindStatus": "confirmed_bulk0040",
+    "registryId": "PMASN",
+    "bulkSource": "0040",
+    "notes": "Sy99ParamRegistry confirmed",
+    "bulkRead": {
+      "frame": "0040",
+      "field": "pmasnRaw"
+    }
+  },
+  {
+    "id": "PMRNG",
+    "bindStatus": "confirmed_bulk0040",
+    "registryId": "PMRNG",
+    "bulkSource": "0040",
+    "notes": "Sy99ParamRegistry confirmed",
+    "bulkRead": {
+      "frame": "0040",
+      "field": "pmrngRaw"
+    }
+  },
+  {
+    "id": "AMASN",
+    "bindStatus": "confirmed_bulk0040",
+    "registryId": "AMASN",
+    "bulkSource": "0040",
+    "notes": "Sy99ParamRegistry confirmed",
+    "bulkRead": {
+      "frame": "0040",
+      "field": "amasnRaw"
+    }
+  },
+  {
+    "id": "AMRNG",
+    "bindStatus": "confirmed_bulk0040",
+    "registryId": "AMRNG",
+    "bulkSource": "0040",
+    "notes": "Sy99ParamRegistry confirmed",
+    "bulkRead": {
+      "frame": "0040",
+      "field": "amrngRaw"
+    }
+  },
+  {
+    "id": "FMASN",
+    "bindStatus": "confirmed_bulk0040",
+    "registryId": "FMASN",
+    "bulkSource": "0040",
+    "notes": "Sy99ParamRegistry confirmed",
+    "bulkRead": {
+      "frame": "0040",
+      "field": "fmasnRaw"
+    }
+  },
+  {
+    "id": "FMRNG",
+    "bindStatus": "confirmed_bulk0040",
+    "registryId": "FMRNG",
+    "bulkSource": "0040",
+    "notes": "Sy99ParamRegistry confirmed",
+    "bulkRead": {
+      "frame": "0040",
+      "field": "fmrngRaw"
+    }
+  },
+  {
+    "id": "PNLASN",
+    "bindStatus": "confirmed_bulk0040",
+    "registryId": "PNLASN",
+    "bulkSource": "0040",
+    "notes": "Sy99ParamRegistry confirmed",
+    "bulkRead": {
+      "frame": "0040",
+      "field": "pnlasnRaw"
+    }
+  },
+  {
+    "id": "PNLRNG",
+    "bindStatus": "confirmed_bulk0040",
+    "registryId": "PNLRNG",
+    "bulkSource": "0040",
+    "notes": "Sy99ParamRegistry confirmed",
+    "bulkRead": {
+      "frame": "0040",
+      "field": "pnlrngRaw"
+    }
+  },
+  {
+    "id": "COASN",
+    "bindStatus": "confirmed_bulk0040",
+    "registryId": "COASN",
+    "bulkSource": "0040",
+    "notes": "Sy99ParamRegistry confirmed",
+    "bulkRead": {
+      "frame": "0040",
+      "field": "coasnRaw"
+    }
+  },
+  {
+    "id": "CORNG",
+    "bindStatus": "confirmed_bulk0040",
+    "registryId": "CORNG",
+    "bulkSource": "0040",
+    "notes": "Sy99ParamRegistry confirmed",
+    "bulkRead": {
+      "frame": "0040",
+      "field": "corngRaw"
+    }
+  },
+  {
+    "id": "PNBASN",
+    "bindStatus": "confirmed_bulk0040",
+    "registryId": "PNBASN",
+    "bulkSource": "0040",
+    "notes": "Sy99ParamRegistry confirmed",
+    "bulkRead": {
+      "frame": "0040",
+      "field": "pnbasnRaw"
+    }
+  },
+  {
+    "id": "PNBRNG",
+    "bindStatus": "confirmed_bulk0040",
+    "registryId": "PNBRNG",
+    "bulkSource": "0040",
+    "notes": "Sy99ParamRegistry confirmed",
+    "bulkRead": {
+      "frame": "0040",
+      "field": "pnbrngRaw"
+    }
+  },
+  {
+    "id": "EGBASN",
+    "bindStatus": "confirmed_bulk0040",
+    "registryId": "EGBASN",
+    "bulkSource": "0040",
+    "notes": "Sy99ParamRegistry confirmed",
+    "bulkRead": {
+      "frame": "0040",
+      "field": "egbasnRaw"
+    }
+  },
+  {
+    "id": "EGBRNG",
+    "bindStatus": "confirmed_bulk0040",
+    "registryId": "EGBRNG",
+    "bulkSource": "0040",
+    "notes": "Sy99ParamRegistry confirmed",
+    "bulkRead": {
+      "frame": "0040",
+      "field": "egbrngRaw"
+    }
+  },
+  {
+    "id": "WLASN",
+    "bindStatus": "confirmed_bulk0040",
+    "registryId": "WLASN",
+    "bulkSource": "0040",
+    "notes": "Sy99ParamRegistry confirmed",
+    "bulkRead": {
+      "frame": "0040",
+      "field": "wlasnRaw"
+    }
+  },
+  {
+    "id": "WLLML",
+    "bindStatus": "confirmed_bulk0040",
+    "registryId": "WLLML",
+    "bulkSource": "0040",
+    "notes": "Sy99ParamRegistry confirmed",
+    "bulkRead": {
+      "frame": "0040",
+      "field": "wllmlRaw"
+    }
+  },
+  {
+    "id": "MCTUN",
+    "bindStatus": "confirmed_bulk0040",
+    "registryId": "MCTUN",
+    "bulkSource": "0040",
+    "notes": "Sy99ParamRegistry confirmed",
+    "bulkRead": {
+      "frame": "0040",
+      "field": "mctunRaw"
+    }
+  },
+  {
+    "id": "RNDP",
+    "bindStatus": "manual_only",
+    "registryId": "RNDP",
+    "bulkSource": null,
+    "notes": ""
+  },
+  {
+    "id": "AFTMD",
+    "bindStatus": "manual_only",
+    "registryId": "AFTMD",
+    "bulkSource": null,
+    "notes": ""
+  },
+  {
+    "id": "SPTPNT",
+    "bindStatus": "confirmed_bulk0040",
+    "registryId": "SPTPNT",
+    "bulkSource": "0040",
+    "notes": "Sy99ParamRegistry confirmed",
+    "bulkRead": {
+      "frame": "0040",
+      "field": "sptpntRaw"
+    }
+  },
+  {
+    "id": "EFMODE",
+    "bindStatus": "confirmed_bulk0040",
+    "registryId": "EFMODE",
+    "bulkSource": "0040",
+    "notes": "Sy99ParamRegistry confirmed",
+    "bulkRead": {
+      "frame": "0040",
+      "field": "efmodeRaw"
+    }
+  }
+]

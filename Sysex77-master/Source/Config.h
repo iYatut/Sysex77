@@ -10,6 +10,8 @@
 
 #pragma once
 #include "DeviceModel.h"
+#include "LiveSynthState.h"
+#include "Sy99LibrarySession.h"
 
 //==============================================================================
 
@@ -29,6 +31,10 @@ struct ConfigPage   : public Component, public ChangeListener, public Button::Li
         addAndMakeVisible(labEngine);
         addAndMakeVisible(comboEngine);
         
+        addAndMakeVisible (btStartupSync);
+        btStartupSync.setToggleState (sy99StartupSyncOnMidiConnectEnabled(), dontSendNotification);
+        btStartupSync.addListener (this);
+
         comboEngine.addItem("01",1);
         comboEngine.addItem("02",2);
         comboEngine.addItem("03",3);
@@ -47,6 +53,7 @@ struct ConfigPage   : public Component, public ChangeListener, public Button::Li
         comboEngine.addItem("ALL",17);
         comboEngine.setSelectedId(1);
         comboEngine.addListener(this);
+        syncSysExEngineFromCombo();
         comboModel.addItem("SY 77", 1);
         comboModel.addItem("TG 77", 2);
         comboModel.addItem("SY 99", 3);
@@ -73,6 +80,7 @@ struct ConfigPage   : public Component, public ChangeListener, public Button::Li
     {
         comboEngine.removeListener(this);
         comboModel.removeListener(this);
+        btStartupSync.removeListener (this);
         btColBack.removeListener(this);
         btColAlt.removeListener(this);
         btColLab.removeListener(this);
@@ -166,14 +174,25 @@ struct ConfigPage   : public Component, public ChangeListener, public Button::Li
         btColSel.setColour(TextButton::ColourIds::buttonColourId,SYColSelected);
         
     }
+    void syncSysExEngineFromCombo() noexcept
+    {
+        const int idx = comboEngine.getSelectedItemIndex();
+
+        if (idx == 16)
+            sysexEngine = 0x10;
+        else
+            sysexEngine = uint8 (0x10 | (idx & 0x0F));
+
+        DeviceModel::getInstance().setSysExDeviceID (sysexEngine);
+    }
+
     void 	comboBoxChanged (ComboBox *comboBoxThatHasChanged) override
     {
         Logger::writeToLog("ConfigPage: comboBox Listener");
-        sysexEngine = comboEngine.getSelectedItemIndex();
-        if(sysexEngine == 16)
-            sysexEngine = 0x10;
 
-        
+        if (comboBoxThatHasChanged == &comboEngine)
+            syncSysExEngineFromCombo();
+
         sysexModel = comboModel.getSelectedItemIndex();
 
         if (comboBoxThatHasChanged == &comboModel)
@@ -187,7 +206,13 @@ struct ConfigPage   : public Component, public ChangeListener, public Button::Li
     }
     void buttonClicked (Button* button) override
     {
-        
+        if (button == &btStartupSync)
+        {
+            sy99StartupSyncOnMidiConnectEnabled() = btStartupSync.getToggleState();
+            saveParams();
+            return;
+        }
+
         Logger::writeToLog("ConfigPage: clicked");
         
         String selectorName = "Colour";
@@ -257,6 +282,7 @@ struct ConfigPage   : public Component, public ChangeListener, public Button::Li
         comboModel.setBounds(10, 24, getWidth()/2 - 20, 24);
         labEngine.setBounds(getWidth()/2 +10, 24, getWidth()/2 - 20, 24);
         comboEngine.setBounds(getWidth()/2 +10, 58, getWidth()/2 - 20, 24);
+        btStartupSync.setBounds (getWidth()/2 + 10, 90, getWidth()/2 - 20, 24);
         
     }
     void initProperties()
@@ -284,6 +310,9 @@ struct ConfigPage   : public Component, public ChangeListener, public Button::Li
             valueTreeVoice.setProperty (IDs::COMMONFOOT,
                                         settings->getIntValue (IDs::COMMONFOOT.toString()),
                                         nullptr);
+            sy99StartupSyncOnMidiConnectEnabled() = settings->getBoolValue ("StartupSyncOnConnect", false);
+            btStartupSync.setToggleState (sy99StartupSyncOnMidiConnectEnabled(), dontSendNotification);
+            libraryLoadPersistedSelection (settings);
         }
         else
         {
@@ -296,7 +325,8 @@ struct ConfigPage   : public Component, public ChangeListener, public Button::Li
         Logger::writeToLog(comboModel.getSelectedIdAsValue().toString());
         props.getUserSettings()->setValue("Model", comboModel.getSelectedIdAsValue());
      props.getUserSettings()->setValue("commonFoot", valueTreeVoice.getPropertyAsValue(IDs::COMMONFOOT, nullptr));
-        
+        props.getUserSettings()->setValue ("StartupSyncOnConnect", sy99StartupSyncOnMidiConnectEnabled());
+        librarySavePersistedSelection (props.getUserSettings());
    
      //   props.getUserSettings()->setValue("mySlider", mySlider.getValue());
     }
@@ -307,6 +337,7 @@ struct ConfigPage   : public Component, public ChangeListener, public Button::Li
     TextButton btColSel {TRANS("Text selected color")};
     Label labEngine {"",TRANS("Machine Engine")};
     ComboBox comboEngine;
+    ToggleButton btStartupSync { TRANS ("Startup sync: edit buffer on MIDI connect") };
     
     ApplicationProperties props;  // object pour sauver les paramètres
     ComboBox    comboModel;
