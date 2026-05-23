@@ -161,9 +161,12 @@ struct LibrairiePage   : public Component, public Button::Listener, private Asyn
             if (libraryContentPage() != page)
                 switchLibraryContentPage (page);
 
+            libraryVoiceSuppressProgramChangeSend() = true;
+
             if (sy99ShouldUseSy99SlotEditor())
             {
                 selectLibrarySlotWithEditor (page, mm);
+                libraryVoiceSuppressProgramChangeSend() = false;
                 return;
             }
 
@@ -175,6 +178,8 @@ struct LibrairiePage   : public Component, public Button::Listener, private Asyn
                 const int rowInBank = mm % 16;
                 selectLibraryPageSlotExclusive (bankIdx, rowInBank);
             }
+
+            libraryVoiceSuppressProgramChangeSend() = false;
         };
 
         libraryVoiceOpenedCallback() = [this] (int globalIdx, const String& voiceName)
@@ -382,6 +387,7 @@ struct LibrairiePage   : public Component, public Button::Listener, private Asyn
     void setLibraryContentPageSilent (Sy99LibraryContentPage page) noexcept
     {
         libraryContentPage() = page;
+        resetLibraryRecallContext();
         highlightLibraryVoiceSlot (-1);
 
         btVoice.setToggleState (page == Sy99LibraryContentPage::internalVoices, dontSendNotification);

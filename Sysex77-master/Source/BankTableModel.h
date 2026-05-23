@@ -265,7 +265,7 @@ public:
     /** Load internal voice grid from SY-99 session capture (AUTOSYNC-VC-INT). */
     void reloadSy99InternalVoiceGrid() noexcept
     {
-        libraryRecallContextBankMsb() = -1;
+        resetLibraryRecallContext();
 
         if (auto* index = sy99EnsureVoiceCaptureIndex (Sy99LibraryContentPage::internalVoices))
         {
@@ -433,7 +433,7 @@ public:
     /** Parse F0…F7 frames from the selected bank .syx into arrayListVoices / offset tables. */
     void reloadVoicesFromSelectedBankFile()
     {
-        libraryRecallContextBankMsb() = -1;
+        resetLibraryRecallContext();
 
         arrayListVoices.clear();
         voiceSysexFileOffsets.clear();

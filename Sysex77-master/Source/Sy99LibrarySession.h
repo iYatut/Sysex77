@@ -479,7 +479,11 @@ inline void selectLibrarySlotWithEditor (Sy99LibraryContentPage page, int mm) no
     if (auto& opened = libraryVoiceOpenedCallback(); opened != nullptr)
         opened (mm, notifyName);
 
-    // Voice/PRE browsing is editor-only — no outbound CC0/CC32/PC (see Librairie WRITE SY99 tooltip).
+    if (! libraryVoiceSuppressProgramChangeSend())
+    {
+        if (auto& programChange = libraryVoiceProgramChangeCallback(); programChange != nullptr)
+            programChange (mm);
+    }
 
     librarySavePersistedSelectionToDisk();
 }

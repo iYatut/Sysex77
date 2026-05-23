@@ -290,6 +290,8 @@ inline int sy99BankLsbForLibraryContentPage (Sy99LibraryContentPage page) noexce
     }
 }
 
+#include "Sy99LibraryNavigation.h"
+
 /** Last Program Change slot 0…15 on channel 1 (paired with inboundLibraryBankMsb). -1 = never seen. */
 inline int& inboundLibraryProgramSlot() noexcept
 {
@@ -310,37 +312,14 @@ inline int& inboundLibraryPreviousBankMsb() noexcept
     return msb;
 }
 
-/** Multi: PC 64…79 → M1…M16 (CC32=18); voice: CC0 × 16 + PC. */
+/** Multi: PC 64…79 → M1…M16 (CC32=18); voice: linear mm from committed state + batch CC0. */
 inline int sy99InboundMmFromProgramChange (Sy99LibraryContentPage page,
                                            int programNumber) noexcept
 {
-    if (libraryPageIsMulti (page))
-    {
-        if (programNumber >= kSy99MultiPcBase
-            && programNumber < kSy99MultiPcBase + kSy99LibraryMultiSlotCount)
-            return programNumber - kSy99MultiPcBase;
-
-        return juce::jlimit (0, kSy99LibraryMultiSlotCount - 1, programNumber % 16);
-    }
-
-    if (programNumber >= 16 && programNumber < 64)
-        return programNumber;
-
-    int slotInBank = programNumber % 16;
-    int bankMsb = inboundLibraryBankMsb();
-
-    const int prevSlot = inboundLibraryPreviousProgramSlot();
-    const int prevBank = inboundLibraryPreviousBankMsb();
-
-    if (prevSlot >= 0)
-    {
-        if (prevSlot == 15 && slotInBank == 0)
-            bankMsb = juce::jlimit (0, 3, prevBank + 1);
-        else if (prevSlot == 0 && slotInBank == 15)
-            bankMsb = juce::jlimit (0, 3, prevBank - 1);
-    }
-
-    return bankMsb * 16 + slotInBank;
+    const juce::uint32 nowMs = juce::Time::getMillisecondCounter();
+    const auto& batch = libraryInboundNavCcBatch();
+    const int cc0Batch = batch.cc0Fresh (nowMs) ? batch.cc0 : -1;
+    return sy99InboundVoiceMmFromPc (page, programNumber, cc0Batch, libraryInboundCommittedState());
 }
 
 inline int sy99OutboundProgramForLibrarySlot (Sy99LibraryContentPage page, int globalMm) noexcept
@@ -368,22 +347,6 @@ inline int resolveCurrentEditorVoiceGlobalIdx() noexcept
     return idx;
 }
 
-/** Internal bank (MSB 0…3) for which a full CC0+CC32+PC recall was last done from the app.
-    -1 = unknown / external — next recall sends the full triple. Not SY99 edit state (not observable in MIDI). */
-inline int& libraryRecallContextBankMsb() noexcept
-{
-    static int msb = -1;
-    return msb;
-}
-
-/** Established outbound Multi context (CC32=18 sent); next Multi recall may be PC-only. */
-inline constexpr int kSy99LibraryRecallMultiContext = -2;
-
-inline void resetLibraryRecallContext() noexcept
-{
-    libraryRecallContextBankMsb() = -1;
-}
-
 inline void clearAllLibraryDisplayState() noexcept
 {
     arrayListVoices.clear();
@@ -392,18 +355,14 @@ inline void clearAllLibraryDisplayState() noexcept
     arrayListMultiIntVoices.clear();
     arrayListMultiPresetVoices.clear();
     libraryContentPage() = Sy99LibraryContentPage::internalVoices;
-    libraryRecallContextBankMsb() = -1;
+    resetLibraryRecallContext();
+    libraryInboundCommittedState() = {};
 }
 
-
-/** true → send CC0+CC32+PC; false → PC only (same MSB as established context). */
+/** true → send CC0+CC32+PC; false → PC only (same page + mm/16 context). */
 inline bool libraryRecallNeedsFullTriple (int globalIdx) noexcept
 {
-    if (globalIdx < 0 || globalIdx > 63)
-        return true;
-
-    const int ctx = libraryRecallContextBankMsb();
-    return ctx < 0 || ctx != (globalIdx / 16);
+    return libraryOutboundNeedsFullTriple (libraryContentPage(), globalIdx);
 }
 
 /** Recall on SY99 (mode chosen in MidiDemo::sendLibraryVoiceRecallToSynth). */
@@ -431,7 +390,12 @@ inline bool& libraryVoiceSuppressProgramChangeSend() noexcept
 struct LibraryVoiceProgramChangeEchoGuard
 {
     int lastGlobalIdx = -1;
+    int lastBankMsb = -1;
+    int lastBankLsb = -1;
+    Sy99LibraryContentPage lastPage = Sy99LibraryContentPage::internalVoices;
     juce::uint32 sentAtMs = 0;
+
+    static constexpr juce::uint32 kWindowMs = 300;
 };
 
 inline LibraryVoiceProgramChangeEchoGuard& libraryVoiceProgramChangeEchoGuard() noexcept
@@ -677,8 +641,7 @@ static inline void selectLibraryVoiceSlotProceed (int slotInBank, int bankOffset
     if (auto& opened = libraryVoiceOpenedCallback(); opened != nullptr)
         opened (globalIdx, notifyName);
 
-    if (! libraryVoiceSuppressProgramChangeSend()
-        && ! bankSelected.equalsIgnoreCase ("SY-99"))
+    if (! libraryVoiceSuppressProgramChangeSend())
     {
         if (auto& programChange = libraryVoiceProgramChangeCallback(); programChange != nullptr)
             programChange (globalIdx);
@@ -699,51 +662,12 @@ static inline void selectLibraryVoiceSlot (int slotInBank, int bankOffset)
     });
 }
 
-/** SY99 → CC32 + CC0 + PC (ch1): Librairie tab + slot; internal also opens editor when bank loaded. */
-static inline void handleIncomingLibraryProgramChange (int programNumber, int midiChannel) noexcept
+/** UI thread: Librairie tab + slot after inbound PC (mm already committed on MIDI thread). */
+static inline void handleIncomingLibraryProgramChangeUi (Sy99LibraryContentPage page, int globalMm) noexcept
 {
-    if (midiChannel != 1 || programNumber < 0)
-        return;
-
-    Sy99LibraryContentPage page = Sy99LibraryContentPage::internalVoices;
-
-    if (! sy99LibraryContentPageFromBankLsb (inboundLibraryBankLsb(), page))
-    {
-        if (inboundLibraryBankLsb() != 0)
-            return;
-
-        page = Sy99LibraryContentPage::internalVoices;
-    }
-
-    const int globalMm = sy99InboundMmFromProgramChange (page, programNumber);
-
-    if (libraryPageIsMulti (page))
-    {
-        inboundLibraryPreviousProgramSlot() = globalMm;
-        inboundLibraryPreviousBankMsb() = 0;
-        inboundLibraryBankMsb() = 0;
-        inboundLibraryProgramSlot() = globalMm;
-        libraryRecallContextBankMsb() = kSy99LibraryRecallMultiContext;
-    }
-    else
-    {
-        inboundLibraryPreviousProgramSlot() = globalMm % 16;
-        inboundLibraryPreviousBankMsb() = globalMm / 16;
-        inboundLibraryBankMsb() = inboundLibraryPreviousBankMsb();
-        inboundLibraryProgramSlot() = inboundLibraryPreviousProgramSlot();
-    }
-
-    auto& echo = libraryVoiceProgramChangeEchoGuard();
-    const juce::uint32 now = juce::Time::getMillisecondCounter();
-
-    if (echo.lastGlobalIdx >= 0 && now - echo.sentAtMs < 120
-        && globalMm == echo.lastGlobalIdx)
-        return;
-
     if (auto& nav = librarySynthPanelNavigateCallback(); nav != nullptr)
         nav (page, globalMm);
 
-    // SY-99 session: nav callback already ingested/applied from the correct capture file.
     if (bankSelected.equalsIgnoreCase ("SY-99"))
         return;
 
@@ -765,6 +689,99 @@ static inline void handleIncomingLibraryProgramChange (int programNumber, int mi
     libraryVoiceSuppressProgramChangeSend() = true;
     selectLibraryVoiceSlot (slotInBank, bankOffset);
     libraryVoiceSuppressProgramChangeSend() = false;
+}
+
+/** Returns true when inbound PC matches a recall we just sent (suppress echo). */
+inline bool libraryInboundPcIsEcho (Sy99LibraryContentPage page, int mm, int pc) noexcept
+{
+    auto& echo = libraryVoiceProgramChangeEchoGuard();
+    const juce::uint32 now = juce::Time::getMillisecondCounter();
+
+    if (echo.lastGlobalIdx < 0 || now - echo.sentAtMs >= LibraryVoiceProgramChangeEchoGuard::kWindowMs)
+        return false;
+
+    if (page == echo.lastPage && mm == echo.lastGlobalIdx)
+        return true;
+
+    if (! libraryPageIsMulti (page) && page == echo.lastPage)
+    {
+        const int bankMsb = mm / 16;
+        const int slot = mm % 16;
+
+        if (bankMsb == echo.lastBankMsb
+            && slot == (pc % 16)
+            && sy99BankLsbForLibraryContentPage (page) == echo.lastBankLsb)
+            return true;
+    }
+
+    return false;
+}
+
+/** MIDI thread: decode mm, commit state, queue UI. */
+inline void processInboundLibraryProgramChangeOnMidiThread (int pc, int midiChannel) noexcept
+{
+    if (midiChannel != 1 || pc < 0)
+        return;
+
+    const juce::uint32 nowMs = juce::Time::getMillisecondCounter();
+    auto& batch = libraryInboundNavCcBatch();
+    auto& committed = libraryInboundCommittedState();
+
+    int cc32 = inboundLibraryBankLsb();
+
+    if (batch.cc32 >= 0 && nowMs - batch.lastAtMs <= LibraryInboundNavCcBatch::kWindowMs)
+        cc32 = batch.cc32;
+
+    Sy99LibraryContentPage page = Sy99LibraryContentPage::internalVoices;
+
+    if (! sy99LibraryContentPageFromBankLsb (cc32, page))
+    {
+        if (cc32 != 0)
+            return;
+
+        page = Sy99LibraryContentPage::internalVoices;
+    }
+
+    const int cc0Batch = batch.cc0Fresh (nowMs) ? batch.cc0 : -1;
+    const int prevMm = committed.mm;
+    const int mm = sy99InboundVoiceMmFromPc (page, pc, cc0Batch, committed);
+
+    committed.page = page;
+    committed.mm = mm;
+
+    if (libraryPageIsMulti (page))
+    {
+        inboundLibraryPreviousProgramSlot() = prevMm >= 0 ? prevMm : -1;
+        inboundLibraryPreviousBankMsb() = 0;
+        inboundLibraryBankMsb() = 0;
+        inboundLibraryProgramSlot() = mm;
+    }
+    else
+    {
+        inboundLibraryPreviousProgramSlot() = prevMm >= 0 ? (prevMm % 16) : -1;
+        inboundLibraryPreviousBankMsb() = prevMm >= 0 ? (prevMm / 16) : 0;
+        inboundLibraryBankMsb() = mm / 16;
+        inboundLibraryProgramSlot() = mm % 16;
+    }
+
+    inboundLibraryBankLsb() = cc32;
+    batch.cc0 = -1;
+
+    libraryNavAuditLog ("RX", page, cc0Batch, cc32, pc, prevMm, mm, false, false);
+
+    if (libraryInboundPcIsEcho (page, mm, pc))
+        return;
+
+    juce::MessageManager::callAsync ([page, mm]
+    {
+        handleIncomingLibraryProgramChangeUi (page, mm);
+    });
+}
+
+/** Legacy entry — prefer processInboundLibraryProgramChangeOnMidiThread. */
+static inline void handleIncomingLibraryProgramChange (int programNumber, int midiChannel) noexcept
+{
+    processInboundLibraryProgramChangeOnMidiThread (programNumber, midiChannel);
 }
 
 /** Step through voices in the loaded bank file (0…63). Used from Voice tab ◀ ▶ / arrow keys. */

@@ -904,9 +904,15 @@ private:
             if (ch == 1)
             {
                 if (cc == 0)
+                {
                     inboundLibraryBankMsb() = message.getControllerValue();
+                    libraryInboundNoteCc0 (ch, message.getControllerValue());
+                }
                 else if (cc == 32)
+                {
                     inboundLibraryBankLsb() = message.getControllerValue();
+                    libraryInboundNoteCc32 (ch, message.getControllerValue());
+                }
             }
 
             const juce::String portName = source != nullptr ? source->getName() : juce::String();
@@ -923,15 +929,7 @@ private:
             const int ch = message.getChannel();
 
             if (ch == 1 && pc >= 0)
-            {
-                inboundLibraryPreviousProgramSlot() = inboundLibraryProgramSlot();
-                inboundLibraryPreviousBankMsb() = inboundLibraryBankMsb();
-            }
-
-            juce::MessageManager::callAsync ([pc, ch]
-            {
-                handleIncomingLibraryProgramChange (pc, ch);
-            });
+                processInboundLibraryProgramChangeOnMidiThread (pc, ch);
         }
 
         // Realtime single-byte messages: F8=Clock, FA=Start, FB=Continue,
@@ -1134,10 +1132,8 @@ public:
                             + " label=\"" + libraryVoiceSlotLabel (globalIdx) + "\"");
     }
 
-    /** [LIBSYNC] Recall SY99 internal voice (outbound → Logger only, not midiMonitor).
-        External: CC0 → CC32 → PC when context unknown or bank MSB changed.
-        In-context: PC only when last full recall established the same MSB (0…3 = banks A–D).
-        Does not read SY99 panel/edit state — see libraryRecallContextBankMsb(). */
+    /** [LIBSYNC] Recall SY99 voice (outbound). Full triple when page, CC32, or mm/16 changed.
+        In-context: PC only when libraryRecallContext matches (page + bankLsb + bankMsb). */
     void sendLibraryVoiceRecallToSynth (int globalIdx)
     {
         constexpr int midiCh = 1;
@@ -1156,11 +1152,13 @@ public:
         const int bankMsb = isMulti ? 0 : (globalIdx / 16);
         const int bankLsb = sy99BankLsbForLibraryContentPage (page);
         const int program = sy99OutboundProgramForLibrarySlot (page, globalIdx);
-        const bool multiCtx = libraryRecallContextBankMsb() == kSy99LibraryRecallMultiContext;
-        const bool fullTriple = isMulti ? ! multiCtx : libraryRecallNeedsFullTriple (globalIdx);
+        const bool fullTriple = libraryOutboundNeedsFullTriple (page, globalIdx);
 
         auto& echo = libraryVoiceProgramChangeEchoGuard();
         echo.lastGlobalIdx = globalIdx;
+        echo.lastBankMsb = bankMsb;
+        echo.lastBankLsb = bankLsb;
+        echo.lastPage = page;
         echo.sentAtMs = juce::Time::getMillisecondCounter();
 
         if (fullTriple)
@@ -1173,10 +1171,9 @@ public:
         pc.setTimeStamp (Time::getMillisecondCounterHiRes() * 0.001);
         sendToOutputs (pc);
 
-        if (! isMulti)
-            libraryRecallContextBankMsb() = bankMsb;
-        else
-            libraryRecallContextBankMsb() = kSy99LibraryRecallMultiContext;
+        libraryRecallContextAfterSend (page, globalIdx);
+
+        libraryNavAuditLog ("TX", page, bankMsb, bankLsb, program, -1, globalIdx, fullTriple, false);
 
         if (fullTriple)
         {
