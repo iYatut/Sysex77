@@ -42,8 +42,8 @@
 | Phase | Description | Status | Evidence | Blocker |
 |-------|-------------|--------|----------|---------|
 | 0 | Baseline spec + Sysex77 inventory | **done** | § Command catalog (baseline), § Gap matrix | — |
-| 1 | SYM7 hardware capture | **done** (monitor paste) | `01_startup_full_20260523_parsed.md` | RX responses not in paste — capture MOTU In separately |
-| 2 | Spec update from capture | **partial** | `sy99_bulk_dump_request.md` §15–16 | Tail variant A/B не подтверждён SYM7 log |
+| 1 | SYM7 hardware capture | **done** | `sym7_request_sequence.md`, user paste 2026-05-23 | RX per-slot 0040VC size — capture separately |
+| 2 | Spec update from capture | **done** | `sy99_bulk_dump_request.md` §16, `sym7_request_sequence.md` | param9 connect — not implemented (manual Bulk Protect) |
 | 3a | Dump request builders (VC/MU/SY/MS) | **done** | `Sy99DumpRequest.h` | — |
 | 3b | Auto-sync 64 voices orchestrator | **done** | `Librairie.h` REQUEST VOICE menu | Hardware verify pending |
 | 3c | Startup edit-buffer on MIDI connect | **done** | `MidiDemo.h`, Config `StartupSyncOnConnect` | Default OFF; hardware verify pending |
@@ -74,18 +74,24 @@
 |---------|-----|----------------|----|----|----------|
 | REQUEST VOICE → edit/a1/b1 test | TX | variant A, timeout → B | 7F/00/00 | 00/00/10 | fixtures partial |
 | Sync from SY99 Start | TX | variant A | 7F | 00 | pending HW |
-| Auto-sync 64 internal (menu) | TX | loop mm=0..3F, variant A→B retry | 00 | 0..63 | pending HW |
+| Auto-sync 64 internal (menu) | TX | loop mm=0..3F, **SYM7 31 B `8101VC`** | 00 | 0..63 | HW verify pending |
+| Auto-sync full library (fast) | TX | SY→MU→8101VC×64→**0040VC×64**→… | 00 | 0..63 | **code 2026-05-24** |
+| BankClick lazy 0040 | TX | **SYM7 `0040VC` mm=slot** | 00 | slot | **code 2026-05-24** |
 | Startup sync (Config ON + MIDI connect) | TX | edit buffer request | 7F | 00 | pending HW |
 
-### SYM7 observed (fill after capture)
+### SYM7 observed (2026-05-23 hardware paste)
 
-| Trigger | Dir | Hex frame | mt | mm | Interval ms | Verified |
-|---------|-----|-----------|----|----|-------------|----------|
-| Patch Viewer open | TX | _pending_ | — | — | — | ❌ |
-| Download single edit | TX | _pending_ | 7F | 00 | — | ❌ |
-| Download A1 | TX | _pending_ | 00 | 00 | — | ❌ |
-| Download 64 voices | TX | _pending_ ×64 | 00 | 0..3F | _pending_ | ❌ |
-| Download everything | TX | _pending_ | — | — | — | ❌ |
+| Trigger | Dir | Hex frame | b28 | mm | Interval ms | Verified |
+|---------|-----|-----------|-----|-----|-------------|----------|
+| Connect preamble | TX | `8101VC` 31 B | 00 | 00 | ~172 to MU | ✅ |
+| Connect preamble | TX | `0040MU` 31 B | 00 | 00 | — | ✅ |
+| Connect handshake | TX | `8101SY` + param9×2 + `0040MU` | — | — | ~165 | ✅ |
+| Library sync internal | TX | `8101VC` ×64 | 00 | 0..3F | ~258 | ✅ (implied) |
+| Library sync 0040 tails | TX | **`0040VC` ×64** | 00 | **0..3F** | **~350** | ✅ |
+| Patch invoke / slot N | TX | **`0040VC` mm=N** | 00 | slot | — | ✅ |
+| **Single 0040VC response** | **RX** | **`0040VC` 115 B** | — | **00 (ANONIM)** | ~27 after 8101 | **✅ format** |
+
+Полная таблица TX: [`fixtures/sym7_captures/sym7_request_sequence.md`](fixtures/sym7_captures/sym7_request_sequence.md)
 
 ---
 
@@ -93,7 +99,9 @@
 
 | Session | File | Scenario | Notes |
 |---------|------|----------|-------|
-| — | _(none yet)_ | — | См. [`fixtures/sym7_captures/README.md`](fixtures/sym7_captures/README.md) |
+| 2026-05-23 | `sym7_request_sequence.md` | Connect + 0040VC×64 sweep | User MIDI-OX paste; TX only |
+| 2026-05-23 | `01_startup_full_20260523_parsed.md` | Startup frame template | Updated with 0040VC phase |
+| 2026-05-24 | `07_rx_nitehwk_invoke.txt` | NiteHwk invoke RX | **0040VC 115B, EFSDLV **127/100** @100/@104** |
 
 ---
 
@@ -108,7 +116,7 @@
 | Patch Viewer mirror on connect | ✅ | ❌ | needs SYM7 capture |
 | Startup edit-buffer sync | ✅? | ✅ opt-in Config | done (default OFF) |
 | Inbound PC → library slot | ✅ | ✅ | **done** — `Sy99LibraryNavigation.h`; `_test_library_navigation.py` + HW verified |
-| Full bulk → UI sliders | ✅ | ❌ | out of scope |
+| Full bulk → UI sliders | ✅ | partial (0040 lazy fetch) | **0040VC BankClick 2026-05-24** |
 
 ---
 
@@ -119,7 +127,9 @@
 | B1 | SYM7 capture sessions 1–6 | `fixtures/sym7_captures/` | P0 | blocked (user HW) |
 | B2 | Confirm tail variant from SYM7 log | `sy99_bulk_dump_request.md` | P0 | blocked |
 | B3 | Multi/SY/MS auto-sync menus | `Librairie.h` | P2 | todo |
-| B4 | Download-everything orchestrator | `Sy99BulkLibraryCapture.h`, `Librairie.h` | P1 | **done** (HW verify pending) |
+| B4 | Download-everything orchestrator | `Sy99BulkLibraryCapture.h`, `Librairie.h` | P1 | **done** (+ **0040VC×64** phase 2026-05-24) |
+| B4b | BankClick lazy **0040VC** (was 8101VC) | `Librairie.h`, `Sy99Lazy0040Fetch.h` | P0 | **done** (HW verify pending) |
+| B8 | RX capture **0040VC mm=05** (~113 B) | `sym7_captures/05_rx_0040vc_a6.txt` | P0 | **format PASS** (ANONIM 115 B); slot A6 optional |
 | B5 | Merge 64 AUTOSYNC files → one bank UX | `Librairie.h` | P3 | todo |
 | B6 | `_validate_dump_request.py` AUTOSYNC cases | `fixtures/` | P1 | partial |
 | B7 | Library nav regression gate | `fixtures/_test_library_navigation.py`, `Sy99LibraryNavigation.h` | P0 | **done** (test + HW verified 2026-05-23) |
@@ -135,6 +145,9 @@
 | 2026-05-23 | Auto-sync saves **one combined** `AUTOSYNC-VOICE64-*.syx` | Practical parity with manual 05:64 capture |
 | 2026-05-23 | Startup sync **default OFF** | Avoid surprise MIDI traffic; Config checkbox |
 | _pending_ | SYM7 tail variant | Needs hardware capture |
+| 2026-05-24 | SYM7 request = **31 B zero-pad**, mm @29; **not** variant A/B | User MIDI-OX capture; `buildSym78101BulkRequest` |
+| 2026-05-24 | BankClick lazy fetch = **`0040VC` mm=slot** (8101 from `.syx`) | SYM7 0040VC×64 sweep + patch invoke |
+| 2026-05-24 | Full sync + **0040VC×64** internal phase | `Sy99BulkLibraryCapture.h` after 8101VC×64 |
 | _pending_ | Inter-request delay ms | SYM7 timeout unknown; Sysex77 uses idle threshold 12s |
 | 2026-05-23 | Library nav: canonical **(page, mm 0..63)**; UI **A1–D16** derived; recall context **page+CC32+mm/16** | SY99 panel = 16 buttons; PRE1/PRE2 = separate 64; `Sy99LibraryNavigation.h` |
 
@@ -167,10 +180,10 @@
 - Updated `sy99_bulk_dump_request.md` §15–16, `00_SPEC.md`, `TEST_STATUS.md`
 
 **Next agent should:**
-1. Run SYM7 capture per README when hardware available
-2. Fill § SYM7 observed in Command catalog
+1. User: RX capture **0040VC mm=05** — см. [`sym7_captures/HW_CAPTURE_0040VC_A6.md`](fixtures/sym7_captures/HW_CAPTURE_0040VC_A6.md)
+2. Rebuild Sysex77 Debug x64; BankClick A11 GrnDual → `fetch0040 TX 0040VC` + `has0040=1`
 3. Run `_validate_dump_request.py` after AUTOSYNC hardware test
-4. If SYM7 uses variant B only, switch default tail in orchestrator
+4. If RX size ≠ ~113 B, update parser idle threshold / phase audit
 
 ---
 

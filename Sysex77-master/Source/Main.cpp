@@ -8,6 +8,7 @@
 
 #include "../JuceLibraryCode/JuceHeader.h"
 #include "MidiDemo.h"
+#include "VoicesTableModel.h"
 #include "Sy99ParamApiServer.h"
 #include "Sy99ControllerTemplateStore.h"
 #include "Sy99HardwareMappingStore.h"
@@ -150,6 +151,17 @@ public:
     const String getApplicationName() override       { return "MidiDemo"; }
     const String getApplicationVersion() override    { return "1.0.0"; }
 
+    void systemRequestedQuit() override
+    {
+        if (! editorPatchDirty())
+        {
+            quit();
+            return;
+        }
+
+        tryLeaveEditorContext ([this] { quit(); });
+    }
+
     void initialise (const String&) override
     {
         juce::File logFile = juce::File::getSpecialLocation (juce::File::currentExecutableFile)
@@ -167,6 +179,7 @@ public:
         getSy99ParamApiServer().start();
 
         mainWindow.reset (new MainWindow ("MidiDemo", new MidiDemo(), *this));
+        clearEditorPatchDirty();
     }
     void myInitialisationWorkFinished()
     {
@@ -210,7 +223,6 @@ private:
         void closeButtonPressed() override
         {
             app.systemRequestedQuit();
-            
         }
 
     private:

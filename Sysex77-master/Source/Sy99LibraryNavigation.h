@@ -1,11 +1,24 @@
 /*
   SY-99 library navigation — canonical (page, mm 0..63).
   Include after Sy99LibraryContentPage, libraryPageIsMulti, kSy99* in VoicesTableModel.h.
+
+  OUTBOUND RECALL POLICY (v1 — do not regress):
+  - Strong step (CC0=0 + CC32 + PC) when host page/CC32 is not in sync with synth (inbound
+    or last successful outbound). After tab switch: CC0+CC32 without PC, then PC-only in-sync.
+  - PC-only only when sy99HostSynthNavInSync(page) — never skip CC32 on mismatch.
+  - libraryRecallContextAfterSend only after successful MIDI TX (MidiDemo).
+
+  NAV STATE QUERY (passive RX — no active "get current slot" SysEx):
+  - Inbound CC0/CC32/PC on ch1 → libraryInboundCommittedState + inboundLibraryBankLsb
+  - Unsolicited 8101VC/MU bulk → librarySynthPanelNavigateCallback
+  - Edit buffer dump mt=7F is buffer contents, not navigation slot
+  - Active dump 0040SY / bulk 0x7A — library sync only, not live nav poll
 */
 
 #pragma once
 
 #include "../JuceLibraryCode/JuceHeader.h"
+#include "Sy99Ui.h"
 
 /** Last committed inbound selection (MIDI thread). */
 struct LibraryInboundCommittedState
@@ -21,7 +34,7 @@ struct LibraryInboundNavCcBatch
     int cc32 = -1;
     juce::uint32 lastAtMs = 0;
 
-    static constexpr juce::uint32 kWindowMs = 8;
+    static constexpr juce::uint32 kWindowMs = 50;
 
     bool cc0Fresh (juce::uint32 nowMs) const noexcept
     {
@@ -126,38 +139,78 @@ inline int sy99InboundVoiceMmFromPc (Sy99LibraryContentPage page,
     if (slot == ((prevSlot + 15) & 15))
         return (committedMm + kSy99LibraryVoiceSlotCount - 1) % kSy99LibraryVoiceSlotCount;
 
-    return (committedMm / 16) * 16 + slot;
+    // PC 0..15 = slot within bank; CC0 MSB latched on ch1 (SY99 may gap CC0 before PC > 8 ms).
+    return juce::jlimit (0, kSy99LibraryVoiceSlotCount - 1,
+                         inboundLibraryBankMsb() * 16 + slot);
 }
 
-inline bool libraryOutboundNeedsFullTriple (Sy99LibraryContentPage page, int mm) noexcept
+/** True when inbound CC32 indicates synth is on Multi while host UI is on VOICE/PRE. */
+inline bool sy99InboundSynthInMultiModeWhileHostOnVoice() noexcept
 {
-    if (libraryPageIsMulti (page))
+    const auto hostPage = libraryContentPage();
+
+    if (libraryPageIsMulti (hostPage))
+        return false;
+
+    const auto& committed = libraryInboundCommittedState();
+
+    if (committed.mm >= 0 && libraryPageIsMulti (committed.page))
+        return true;
+
+    const int cc32 = inboundLibraryBankLsb();
+    return cc32 == kSy99Cc32MultiInternal || cc32 == kSy99Cc32MultiPreset;
+}
+
+/** Suffix for labelInfoLine when synth Multi mode blocks voice recall. */
+inline juce::String sy99LibraryNavMismatchHintSuffix() noexcept
+{
+    if (! sy99InboundSynthInMultiModeWhileHostOnVoice())
+        return {};
+
+    return Sy99Ui::navMultiModeHintSuffix();
+}
+
+/** Host Librairie page matches synth bank (inbound CC32/page or last successful outbound). */
+inline bool sy99HostSynthNavInSync (Sy99LibraryContentPage page) noexcept
+{
+    const int expectedLsb = sy99BankLsbForLibraryContentPage (page);
+    const auto& committed = libraryInboundCommittedState();
+
+    if (committed.mm >= 0)
     {
-        const auto& ctx = libraryRecallContext();
-        return ! ctx.multiMode || ctx.page != page;
+        if (committed.page != page)
+            return false;
+
+        return sy99BankLsbForLibraryContentPage (committed.page) == expectedLsb;
     }
 
-    if (mm < 0 || mm > kSy99LibraryVoiceSlotCount - 1)
-        return true;
+    const int cc32 = inboundLibraryBankLsb();
+    Sy99LibraryContentPage inboundPage;
+
+    if (sy99LibraryContentPageFromBankLsb (cc32, inboundPage))
+    {
+        if (inboundPage != page)
+            return false;
+
+        return cc32 == expectedLsb;
+    }
+
+    if (cc32 == 0)
+        return page == Sy99LibraryContentPage::internalVoices;
 
     const auto& ctx = libraryRecallContext();
 
-    if (ctx.mm < 0 || ctx.multiMode)
-        return true;
-
-    const int bankMsb = mm / 16;
-    const int bankLsb = sy99BankLsbForLibraryContentPage (page);
-
-    if (ctx.page != page)
-        return true;
-
-    if (ctx.bankLsb != bankLsb)
-        return true;
-
-    if (ctx.bankMsb != bankMsb)
+    if (ctx.page == page && ctx.bankLsb == expectedLsb)
         return true;
 
     return false;
+}
+
+/** Strong CC0+CC32+PC when page/CC32 not in sync; PC-only when in sync (panel-like). */
+inline bool libraryOutboundNeedsFullTriple (Sy99LibraryContentPage page, int mm) noexcept
+{
+    juce::ignoreUnused (mm);
+    return ! sy99HostSynthNavInSync (page);
 }
 
 inline void libraryRecallContextAfterSend (Sy99LibraryContentPage page, int mm) noexcept
@@ -179,6 +232,40 @@ inline void libraryRecallContextAfterSend (Sy99LibraryContentPage page, int mm) 
     ctx.bankMsb = mm / 16;
     ctx.bankLsb = sy99BankLsbForLibraryContentPage (page);
     ctx.multiMode = false;
+}
+
+/** After tab switch: CC0+CC32 sent without PC — bank established, mm unknown. */
+inline void libraryRecallContextAfterPageBankSelect (Sy99LibraryContentPage page) noexcept
+{
+    auto& ctx = libraryRecallContext();
+    ctx.page = page;
+    ctx.mm = -1;
+    ctx.bankLsb = sy99BankLsbForLibraryContentPage (page);
+    ctx.multiMode = libraryPageIsMulti (page);
+
+    if (ctx.multiMode)
+        ctx.bankMsb = kSy99LibraryRecallMultiContext;
+    else
+        ctx.bankMsb = -1;
+}
+
+/** CC0 with CC32: always 0 (panel). PC-only within bank A: CC0 when leaving B/C/D. */
+inline bool sy99OutboundNeedsCc0ForRecall (Sy99LibraryContentPage page,
+                                           int mm,
+                                           bool sendingCc32) noexcept
+{
+    if (sendingCc32)
+        return true;
+
+    if (libraryPageIsMulti (page) || mm < 0 || mm >= 16)
+        return false;
+
+    const auto& ctx = libraryRecallContext();
+
+    if (ctx.mm < 0 || ctx.multiMode || ctx.page != page)
+        return true;
+
+    return (ctx.mm / 16) != 0;
 }
 
 inline void libraryNavAuditLog (const char* direction,

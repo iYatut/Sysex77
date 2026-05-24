@@ -16,7 +16,8 @@ PAGE_MULTI_INT = 3
 CC32_INTERNAL = 0
 CC32_PRE1 = 2
 CC32_PRE2 = 5
-CC32_MULTI = 18
+CC32_MULTI_INT = 16
+CC32_MULTI_PRE = 18
 
 
 def bank_lsb_for_page(page: int) -> int:
@@ -25,8 +26,22 @@ def bank_lsb_for_page(page: int) -> int:
     if page == PAGE_PRE2:
         return CC32_PRE2
     if page == PAGE_MULTI_INT:
-        return CC32_MULTI
+        return CC32_MULTI_INT
     return CC32_INTERNAL
+
+
+def page_from_bank_lsb(cc32: int) -> int | None:
+    if cc32 == CC32_INTERNAL:
+        return PAGE_INTERNAL
+    if cc32 == CC32_PRE1:
+        return PAGE_PRE1
+    if cc32 == CC32_PRE2:
+        return PAGE_PRE2
+    if cc32 == CC32_MULTI_INT:
+        return PAGE_MULTI_INT
+    if cc32 == CC32_MULTI_PRE:
+        return PAGE_MULTI_INT  # preset multi page id differs in app; PC decode same
+    return None
 
 
 def inbound_voice_mm_from_pc(
@@ -34,6 +49,7 @@ def inbound_voice_mm_from_pc(
     pc: int,
     cc0_in_batch: int,
     committed_mm: int,
+    latched_bank_msb: int = 0,
 ) -> int:
     if page == PAGE_MULTI_INT:
         if K_MULTI_PC_BASE <= pc < K_MULTI_PC_BASE + K_MULTI_SLOTS:
@@ -59,7 +75,7 @@ def inbound_voice_mm_from_pc(
     if slot == ((prev_slot + 15) & 15):
         return (committed_mm + K_VOICE_SLOTS - 1) % K_VOICE_SLOTS
 
-    return (committed_mm // 16) * 16 + slot
+    return min(K_VOICE_SLOTS - 1, max(0, latched_bank_msb * 16 + slot))
 
 
 class RecallContext:
@@ -91,9 +107,23 @@ def outbound_needs_full_triple(page: int, mm: int, ctx: RecallContext) -> bool:
         return True
     if ctx.bank_lsb != bank_lsb:
         return True
-    if ctx.bank_msb != bank_msb:
-        return True
     return False
+
+
+def outbound_program_for_slot(page: int, global_mm: int) -> int:
+    if page == PAGE_MULTI_INT:
+        return min(127, K_MULTI_PC_BASE + global_mm)
+    if global_mm >= 16:
+        return global_mm
+    return min(15, max(0, global_mm))
+
+
+def outbound_needs_cc0_for_recall(page: int, mm: int, ctx: RecallContext) -> bool:
+    if page == PAGE_MULTI_INT or mm < 0 or mm >= 16:
+        return False
+    if ctx.mm < 0 or ctx.multi_mode or ctx.page != page:
+        return True
+    return (ctx.mm // 16) != 0
 
 
 def recall_context_after_send(page: int, mm: int, ctx: RecallContext) -> None:
@@ -156,12 +186,61 @@ def test_same_column_pc_only() -> None:
     )
 
 
-def test_cross_column_full_triple() -> None:
+def test_cross_column_pc_only() -> None:
     ctx = RecallContext()
     recall_context_after_send(PAGE_INTERNAL, mm=15, ctx=ctx)  # A16
-    assert outbound_needs_full_triple(PAGE_INTERNAL, mm=16, ctx=ctx), (
-        "A16→B1: mm/16 changed → full triple"
+    assert not outbound_needs_full_triple(PAGE_INTERNAL, mm=16, ctx=ctx), (
+        "A16→B1 same page: direct PC 15→16, no CC0/CC32"
     )
+
+
+def test_outbound_pc_is_global_mm() -> None:
+    assert outbound_program_for_slot(PAGE_INTERNAL, 27) == 27, "B12 → PC=27"
+    assert outbound_program_for_slot(PAGE_INTERNAL, 34) == 34, "C3 → PC=34"
+    assert outbound_program_for_slot(PAGE_INTERNAL, 11) == 11, "A12 → PC=11"
+
+
+def test_outbound_cc0_for_bank_a() -> None:
+    ctx = RecallContext()
+    recall_context_after_send(PAGE_INTERNAL, mm=27, ctx=ctx)  # B12
+    assert outbound_needs_cc0_for_recall(PAGE_INTERNAL, 11, ctx), "B→A needs CC0=0"
+    recall_context_after_send(PAGE_INTERNAL, mm=11, ctx=ctx)  # A12
+    assert not outbound_needs_cc0_for_recall(PAGE_INTERNAL, 12, ctx), "A12→A13 PC only"
+
+
+def test_multi_inbound_pc_64_79() -> None:
+    for pc in range(64, 80):
+        mm = inbound_voice_mm_from_pc(PAGE_MULTI_INT, pc=pc, cc0_in_batch=-1, committed_mm=-1)
+        assert mm == pc - K_MULTI_PC_BASE, f"PC={pc} → M{mm + 1}"
+
+
+def test_multi_cc32_16_maps_page() -> None:
+    assert page_from_bank_lsb(16) == PAGE_MULTI_INT
+    assert page_from_bank_lsb(18) is not None
+    assert page_from_bank_lsb(99) is None
+
+
+def test_b_to_a_via_cc0_latch() -> None:
+    """B12 → A12: PC=11 with latched CC0 MSB=0 (bank A)."""
+    mm = inbound_voice_mm_from_pc(
+        PAGE_INTERNAL, pc=11, cc0_in_batch=-1, committed_mm=27, latched_bank_msb=0
+    )
+    assert mm == 11, f"B→A: expected A12 mm=11, got {mm} ({slot_code(mm)})"
+
+
+def test_b_to_a_via_cc0_batch() -> None:
+    mm = inbound_voice_mm_from_pc(
+        PAGE_INTERNAL, pc=11, cc0_in_batch=0, committed_mm=27, latched_bank_msb=1
+    )
+    assert mm == 11, f"CC0 batch=0 PC=11: expected A12 mm=11, got {mm}"
+
+
+def test_b_same_bank_pc_only() -> None:
+    """B12 → B13: dial +1 without CC0."""
+    mm = inbound_voice_mm_from_pc(
+        PAGE_INTERNAL, pc=12, cc0_in_batch=-1, committed_mm=27, latched_bank_msb=1
+    )
+    assert mm == 28, f"B12→B13: expected mm=28, got {mm} ({slot_code(mm)})"
 
 
 def main() -> int:
@@ -172,7 +251,14 @@ def main() -> int:
         test_cc0_batch_no_wrap,
         test_pre1_after_internal_needs_full_triple,
         test_same_column_pc_only,
-        test_cross_column_full_triple,
+        test_cross_column_pc_only,
+        test_outbound_pc_is_global_mm,
+        test_outbound_cc0_for_bank_a,
+        test_multi_inbound_pc_64_79,
+        test_multi_cc32_16_maps_page,
+        test_b_to_a_via_cc0_latch,
+        test_b_to_a_via_cc0_batch,
+        test_b_same_bank_pc_only,
     ]
     failed = 0
     for t in tests:

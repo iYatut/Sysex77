@@ -15,6 +15,7 @@
 #include <atomic>
 
 #include "LiveSynthState.h"
+#include "Sy99VoiceCaptureIndexCache.h"
 #include "VoicesTableModel.h"
 #include "YamahaLmVoiceDump.h"
 #include "../JuceLibraryCode/JuceHeader.h"
@@ -214,6 +215,13 @@ inline juce::File saveCapturedSysexToLibrary (const juce::Array<juce::MidiMessag
     if (analysisOut != nullptr)
         *analysisOut = analyzed;
 
+    int expectedFrames = 0;
+
+    if (namePrefix.contains ("VC") || namePrefix.containsIgnoreCase ("VOICE64"))
+        expectedFrames = 64;
+    else if (namePrefix.contains ("MU"))
+        expectedFrames = 16;
+
     juce::File outFile;
 
     if (sy99UsesStableSyncCaptureName (namePrefix))
@@ -239,6 +247,19 @@ inline juce::File saveCapturedSysexToLibrary (const juce::Array<juce::MidiMessag
         fos.write (m.getRawData(), m.getRawDataSize());
 
     fos.flush();
+
+    if (expectedFrames > 0 && analyzed.lm8101Frames != expectedFrames)
+    {
+        Logger::writeToLog ("[BulkRecv] WARN 8101 frameCount="
+                            + String (analyzed.lm8101Frames)
+                            + " expected="
+                            + String (expectedFrames)
+                            + " prefix="
+                            + namePrefix);
+    }
+
+    if (outFile.existsAsFile())
+        sy99WriteCaptureManifestFromMessages (messages, outFile);
 
     if (sy99UsesStableSyncCaptureName (namePrefix))
     {
@@ -269,6 +290,12 @@ static constexpr int kSy99LibrarySyncIdleTicksTimeout = 80;
 
 /** VC phase avg TX-to-TX gap from SYM7 capture (8101VC b28=0). */
 static constexpr int kSym7VcInterRequestDelayMs = 258;
+
+/** Gap after 8101 RX before 0040 TX within one slot (invoke ~27 ms). */
+static constexpr int kSym7IntraSlot0040DelayMs = 40;
+
+/** Auto-sync #30: 64 slots × (8101 + 0040) interleaved. */
+static constexpr int kSy99AutoSync64TotalSteps = kSy99AutoSyncInternalVoiceCount * 2;
 
 /** Timer ticks: 0 = advance on complete SysEx; partial debounce ~50 ms. */
 static constexpr int kSy99LibrarySyncIdleTicksComplete = 0;
@@ -441,12 +468,22 @@ inline void sy99Sym7RecordRxLatency (Sy99Sym7Pacing& pacing) noexcept
                                  : 0;
 }
 
+enum class Sy99AutoSync64SubStep : uint8
+{
+    wait8101 = 0,
+    wait0040 = 1
+};
+
 struct Sy99AutoSync64Session
 {
     bool active = false;
     bool handlingRxSlot = false;
     int currentMm = 0;
     uint8 byte28 = 0;
+    Sy99AutoSync64SubStep subStep = Sy99AutoSync64SubStep::wait8101;
+    bool retry0040Pending = false;
+    int stepsCompleted = 0;
+    int paired0040Count = 0;
     Sy99Sym7Pacing pacing;
     int loadedCount = 0;
     juce::Array<juce::MidiMessage> accumulator;
@@ -468,7 +505,26 @@ inline void sy99AutoSync64Reset() noexcept
     s.pacing = {};
     s.loadedCount = 0;
     s.handlingRxSlot = false;
+    s.subStep = Sy99AutoSync64SubStep::wait8101;
+    s.retry0040Pending = false;
+    s.stepsCompleted = 0;
+    s.paired0040Count = 0;
     s.accumulator.clear();
+}
+
+inline bool sy99BatchContainsLmTag (const juce::Array<juce::MidiMessage>& batch,
+                                    const char* tag6) noexcept
+{
+    for (const auto& m : batch)
+    {
+        if (! m.isSysEx())
+            continue;
+
+        if (YamahaLmVoiceDump::frameContainsLmTag (m.getRawData(), m.getRawDataSize(), tag6))
+            return true;
+    }
+
+    return false;
 }
 
 // =============================================================================
@@ -606,7 +662,7 @@ inline void sy99FillLibraryPageNamesFromMessages (Sy99LibraryContentPage page,
     }
 }
 
-/** Reload slot names from a saved .syx capture file. */
+/** Reload slot names from a saved .syx capture file (manifest-first, no syx scan on hot path). */
 inline int sy99LoadLibraryPageNamesFromCaptureFile (const juce::File& file,
                                                     Sy99LibraryContentPage page,
                                                     int slotCount) noexcept
@@ -614,41 +670,23 @@ inline int sy99LoadLibraryPageNamesFromCaptureFile (const juce::File& file,
     if (! file.existsAsFile() || slotCount <= 0)
         return 0;
 
-    juce::MemoryBlock data;
-
-    if (! file.loadFileAsData (data))
-        return 0;
-
-    const auto* bytes = static_cast<const juce::uint8*> (data.getData());
-    const size_t size = data.getSize();
-
     beginLibraryPagePreview (page, slotCount);
     auto& slots = libraryPageSlotNames (page);
-    int slot = 0;
+    juce::StringArray names;
+    sy99LoadManifestSlotNamesIntoArray (file, names, slotCount);
 
-    for (size_t i = 0; i < size && slot < slotCount; ++i)
+    int loaded = 0;
+
+    for (int i = 0; i < slotCount; ++i)
     {
-        if (bytes[i] != 0xF0)
-            continue;
-
-        size_t end = i + 1;
-
-        while (end < size && bytes[end] != 0xF7)
-            ++end;
-
-        if (end >= size || bytes[end] != 0xF7)
-            break;
-
-        const int frameLen = (int) (end - i + 1);
-        juce::Array<juce::MidiMessage> one;
-        one.add (juce::MidiMessage (bytes + i, frameLen));
-
-        slots.set (slot, sy99PreviewNameFromSysexMessages (one));
-        ++slot;
-        i = end;
+        if (names[i].isNotEmpty())
+        {
+            slots.set (i, names[i]);
+            ++loaded;
+        }
     }
 
-    return slot;
+    return loaded;
 }
 
 inline juce::String sy99AutoSyncVoiceNameFromMessages (
@@ -660,7 +698,7 @@ inline juce::String sy99AutoSyncVoiceNameFromMessages (
 inline juce::File saveAutoSync64CombinedCapture (
     const juce::Array<juce::MidiMessage>& messages) noexcept
 {
-    return saveCapturedSysexToLibrary (messages, "AUTOSYNC-VOICE64", nullptr);
+    return saveCapturedSysexToLibrary (messages, "AUTOSYNC-VC-INT", nullptr);
 }
 
 // =============================================================================
@@ -684,11 +722,12 @@ inline const Sy99LibrarySyncPhase* sy99FullLibrarySyncPhases() noexcept
 {
     static const Sy99LibrarySyncPhase phases[] =
     {
-        // Order + inter-request gaps from SYM7 — 02_startup_full_20260523.txt
-        { "8101SY", 0x00,  1, "AUTOSYNC-SY",       false, 0, false, false,   0 },
-        { "0040MU", 0x00,  1, "AUTOSYNC-0040MU",   false, 0, false, false,   0 },
-        { "8101VC", 0x00, 64, "AUTOSYNC-VC-INT",   true,  0, true,  true, 258 },
-        { "8101VC", 0x02, 64, "AUTOSYNC-VC-P2",    true,  1, true,  true, 260 },
+        // Order + inter-request gaps from SYM7 — sym7_captures/01 + user 2026-05-23
+        { "8101SY", 0x00,  1, "AUTOSYNC-SY",         false, 0, false, false,   0 },
+        { "0040MU", 0x00,  1, "AUTOSYNC-0040MU",     false, 0, false, false,   0 },
+        { "8101VC", 0x00, 64, "AUTOSYNC-VC-INT",     true,  0, true,  true, 258 },
+        { "0040VC", 0x00, 64, "AUTOSYNC-0040VC-INT", false, 0, false, true, 350 },
+        { "8101VC", 0x02, 64, "AUTOSYNC-VC-P2",      true,  1, true,  true, 260 },
         { "8101VC", 0x03, 64, "AUTOSYNC-VC-P3",    true,  2, true,  true, 245 },
         { "8101MU", 0x00, 16, "AUTOSYNC-MU-INT",   true,  3, true,  true, 126 },
         { "8101MU", 0x02, 16, "AUTOSYNC-MU-P2",    true,  4, true,  true, 128 },
@@ -704,7 +743,7 @@ inline const Sy99LibrarySyncPhase* sy99FullLibrarySyncPhases() noexcept
 
 inline int sy99FullLibrarySyncPhaseCount() noexcept
 {
-    return 12;
+    return 13;
 }
 
 inline const Sy99LibrarySyncPhase& sy99FullLibrarySyncPhaseAt (int index) noexcept
@@ -888,6 +927,28 @@ inline juce::String sy99FullLibrarySyncPhaseLabel (int phaseIndex, int mm) noexc
     return juce::String (phase.lmType6)
            + " b28=" + juce::String::toHexString ((int) phase.byte28).paddedLeft ('0', 2)
            + " mm=" + juce::String::toHexString (mm).paddedLeft ('0', 2);
+}
+
+/** Short Librairie tab / banner label for the active sync phase. */
+inline juce::String sy99FullLibrarySyncPhaseUserLabel (int phaseIndex) noexcept
+{
+    switch (phaseIndex)
+    {
+        case 2:  return juce::String::fromUTF8 (u8"Internal — имена (8101)");
+        case 3:  return juce::String::fromUTF8 (u8"Internal — хвосты (0040)");
+        case 4:  return juce::String::fromUTF8 (u8"PRE1");
+        case 5:  return juce::String::fromUTF8 (u8"PRE2");
+        case 6:  return juce::String::fromUTF8 (u8"Multi Internal");
+        case 7:  return juce::String::fromUTF8 (u8"Multi Preset");
+        case 0:  return juce::String ("System");
+        case 1:  return juce::String ("Multi setup");
+        default: break;
+    }
+
+    if (phaseIndex < 0 || phaseIndex >= sy99FullLibrarySyncPhaseCount())
+        return {};
+
+    return sy99FullLibrarySyncPhaseAt (phaseIndex).lmType6;
 }
 
 /** After full sync: rebuild all preview pages from saved captures (source of truth). */

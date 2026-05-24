@@ -110,4 +110,5 @@ When the user explicitly wants a **web/JS** mirror editor, spawn a **separate** 
 | `09_confirmed_addresses.md` | **Clean extract** — confirmed SysEx addresses; use instead of `MIDI_MAP_OBSERVATIONS.md` |
 | `sy99_sysex_complete.md` | Long-form SY99 SysEx notes (parameter change) |
 | `sy99_bulk_dump_request.md` | Bulk Dump Request/Response (LM 0040VC/MU/SY/MS), Memory_type/#, auto-dump strategy |
+| `SYM7_library_sync_progress.md` | **Agent nav board** — SYM7 auto-sync research, capture log, gap matrix, parity backlog |
 | `SY99E2_reference.txt` | PDF / manual pointers |

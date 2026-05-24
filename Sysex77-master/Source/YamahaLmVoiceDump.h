@@ -18,6 +18,18 @@
 
 namespace YamahaLmVoiceDump
 {
+    enum class Lm8101ParseMode : std::uint8_t
+    {
+        ingest,
+        auditDebug
+    };
+
+    inline bool lm8101ParserVerboseLoggingEnabled() noexcept
+    {
+        static const bool verbose = juce::SystemStats::getEnvironmentVariable ("SY99_PARSER_VERBOSE", {})
+                                        .equalsIgnoreCase ("1");
+        return verbose;
+    }
     constexpr int kLmTagOffsetFromLm = 4;   // "8101VC" / "0040VC" at LM+4
     constexpr int kLm8101VcNameOffset = 33;
     constexpr int kLm8101MuNameOffset = 32;
@@ -34,7 +46,7 @@ namespace YamahaLmVoiceDump
     constexpr int kLm8101VcOutselE1OffsetTypical = 98;
 
     constexpr int kMin8101VcFrameSize = 100;
-    constexpr int kMin0040VcFrameSize = 100;
+    constexpr int kMin0040VcFrameSize = 105;
 
     /** 0040VC group-02 tail offsets (lm_8101_offsets.md). */
     constexpr int kLm0040WpbrOffset = 41;
@@ -57,7 +69,10 @@ namespace YamahaLmVoiceDump
     constexpr int kLm0040WllmlOffset = 55;
     constexpr int kLm0040MctunOffset = 90;
     constexpr int kLm0040RndpOffset = 52;
-    constexpr int kLm0040AftmdOffset = 100;
+    /** EFSDLV El.1 in 0040VC tail (elmode 8 hardware diff; was mis-tagged AFTMD @+100). */
+    constexpr int kLm0040EfsdlvE1Offset = 100;
+    /** EFSDLV El.2 in 0040VC tail (elmode 8 hardware diff). */
+    constexpr int kLm0040EfsdlvE2Offset = 104;
     constexpr int kLm0040SptpntOffset = 98;
     /** Effect mode (live `08 00 00 20`): Off=0 Serial=1 Parallel=2. Confirmed fixtures 06–08 @+33. */
     constexpr int kLm0040EfmodeOffset = 33;
@@ -173,8 +188,54 @@ namespace YamahaLmVoiceDump
         return elvlOff + 36;
     }
 
-    /** EFSDLV bulk @ EFLN1EL + 12 (fixture 03 EP:Classic lvl 127 @ efln+12). */
+    /** 8101 @ EFLN1EL + 12 — diagnostic only; matches 0040 @100 on Classic, poison on NiteHwk (76 vs LCD 127). */
     constexpr int kLm8101VcEfsdlvDeltaFromEfln = 12;
+
+    /** Autosync-only fallback when 0040VC is absent; not authoritative (HW EP:NiteHwk 2026-05-24). */
+    inline bool efsendBulk8101FallbackForElmodeRaw (int elmodeRaw) noexcept
+    {
+        return elmodeRaw == 4;
+    }
+
+    inline bool efsendBulk8101TrustedForElmodeRaw (int elmodeRaw) noexcept
+    {
+        return efsendBulk8101FallbackForElmodeRaw (elmodeRaw);
+    }
+
+    /** EFSDLV El.1 in 0040VC @100 — elmode 4 (NiteHwk HW) and 8 (GrnDual). */
+    inline bool efsendBulk0040E1TrustedForElmodeRaw (int elmodeRaw) noexcept
+    {
+        return elmodeRaw == 4 || elmodeRaw == 8;
+    }
+
+    inline bool efsendBulk0040TrustedForElmodeRaw (int elmodeRaw) noexcept
+    {
+        return efsendBulk0040E1TrustedForElmodeRaw (elmodeRaw);
+    }
+
+    /** EFSDLV El.2 in 0040VC @104 — elmode 4 and 8. */
+    inline bool efsendBulk0040E2TrustedForElmodeRaw (int elmodeRaw) noexcept
+    {
+        return elmodeRaw == 4 || elmodeRaw == 8;
+    }
+
+    /** Live param9 `03 NN 00 0A` — Effect Send Level (all elements). */
+    inline bool isEfsendlvlLiveParam9Frame (uint8 b3, uint8 b4, uint8 b5, uint8 b6) noexcept
+    {
+        if (b3 != 0x03 || b5 != 0x00 || b6 != 0x0a)
+            return false;
+
+        switch (b4)
+        {
+            case 0x00:
+            case 0x20:
+            case 0x40:
+            case 0x60:
+                return true;
+            default:
+                return false;
+        }
+    }
 
     inline bool eldtE1UsesOutselStrip (int elmodeRaw) noexcept
     {
@@ -207,6 +268,37 @@ namespace YamahaLmVoiceDump
     {
         juce::ignoreUnused (eldtSharesByte);
         return (int) (packed & 0x06);
+    }
+
+    inline int outselWireValueMasked (int raw) noexcept
+    {
+        if (raw < 0)
+            return -1;
+
+        return (int) ((uint8) raw & 0x06);
+    }
+
+    /** EFLN1EL wire bits: Send 1 = 0x01, Send 3 = 0x04 (no Send 2/4 on SY99). */
+    inline int eflnWireValueMasked (int raw) noexcept
+    {
+        if (raw < 0)
+            return -1;
+
+        return (int) ((uint8) raw & 0x05);
+    }
+
+    /** Send 3 only valid in EFMODE Parallel (0x02). */
+    inline int eflnUiForEffectMode (int maskedRaw, int efmodeRaw) noexcept
+    {
+        if (maskedRaw < 0)
+            return -1;
+
+        int ui = eflnWireValueMasked (maskedRaw);
+
+        if (efmodeRaw >= 0 && efmodeRaw != 2)
+            ui &= ~0x04;
+
+        return ui;
     }
 
     inline int findFirstMixerAnchor (const uint8* frame, int frameSize) noexcept
@@ -366,9 +458,10 @@ namespace YamahaLmVoiceDump
         int wllmlRaw = -1;
         int mctunRaw = -1;
         int rndpRaw = -1;
-        int aftmdRaw = -1;
         int sptpntRaw = -1;
         int efmodeRaw = -1;
+        int efsdlvE1Raw = -1;
+        int efsdlvE2Raw = -1;
     };
 
     inline bool tagsEqual6 (const uint8* at, const char* tag6) noexcept
@@ -634,6 +727,31 @@ namespace YamahaLmVoiceDump
         copyLm8101BlockName (frame, frameSize, "8101VC", dest, destSize);
     }
 
+    /** Name + ELMODE for library index listing — avoids full parse and Debug audit spam. */
+    inline bool readLm8101VcIndexFields (const uint8* frame,
+                                         int frameSize,
+                                         char* nameOut,
+                                         int nameOutSize,
+                                         int& elmodeRawOut) noexcept
+    {
+        elmodeRawOut = -1;
+
+        if (nameOut == nullptr || nameOutSize <= 0)
+            return false;
+
+        copyVoiceName (frame, frameSize, nameOut, nameOutSize);
+
+        if (frame != nullptr && frameSize > kLm8101VcElmodeOffset)
+        {
+            const uint8 em = frame[kLm8101VcElmodeOffset];
+
+            if (em <= 10)
+                elmodeRawOut = (int) em;
+        }
+
+        return nameOut[0] != '\0';
+    }
+
     /** Packed WOL / ELVL E1: prefix `03` or `01` @ i−1, WOL @ i, `00 00` @ i+1…i+2, ELVL E1 @ i+3.
         07:1 fixtures use `03` @ 93, WOL @ 94; 05:64 short 8101 often uses `01` @ 94, WOL @ 95. */
     inline bool findWolElvlE1Pair (const uint8* frame, int frameSize, int& wolOff, int& elvlOff) noexcept
@@ -783,9 +901,11 @@ namespace YamahaLmVoiceDump
             const int eflnOff = efln1ElOffsetFromElvlWol (out.elvlE1Offset, out.wolOffset);
 
             if (eflnOff >= 0 && eflnOff < frameSize)
-                out.lmEfln1ElRaw = (int) frame[eflnOff];
+                out.lmEfln1ElRaw = eflnWireValueMasked ((int) frame[eflnOff]);
 
-            if (eflnOff >= 0 && eflnOff + kLm8101VcEfsdlvDeltaFromEfln < frameSize)
+            if (efsendBulk8101TrustedForElmodeRaw (out.elmodeRaw)
+                && eflnOff >= 0
+                && eflnOff + kLm8101VcEfsdlvDeltaFromEfln < frameSize)
                 out.lmEfsdlvRaw = (int) frame[eflnOff + kLm8101VcEfsdlvDeltaFromEfln];
 
             /* EFSDVSNS / EFSDSCL: not located in 8101VC bulk (live param9 only). */
@@ -876,7 +996,8 @@ namespace YamahaLmVoiceDump
         readByteIfInRange (frame, frameSize, kLm0040WllmlOffset, out.wllmlRaw);
         readByteIfInRange (frame, frameSize, kLm0040MctunOffset, out.mctunRaw);
         readByteIfInRange (frame, frameSize, kLm0040RndpOffset, out.rndpRaw);
-        readByteIfInRange (frame, frameSize, kLm0040AftmdOffset, out.aftmdRaw);
+        readByteIfInRange (frame, frameSize, kLm0040EfsdlvE1Offset, out.efsdlvE1Raw);
+        readByteIfInRange (frame, frameSize, kLm0040EfsdlvE2Offset, out.efsdlvE2Raw);
         readByteIfInRange (frame, frameSize, kLm0040SptpntOffset, out.sptpntRaw);
         readByteIfInRange (frame, frameSize, kLm0040EfmodeOffset, out.efmodeRaw);
 
@@ -1002,7 +1123,10 @@ namespace YamahaLmVoiceDump
         return -1;
     }
 
-    inline bool parseLm8101VcMinimal (const uint8* frame, int frameSize, Lm8101VcMinimal& out) noexcept
+    inline bool parseLm8101VcMinimal (const uint8* frame,
+                                      int frameSize,
+                                      Lm8101VcMinimal& out,
+                                      Lm8101ParseMode mode = Lm8101ParseMode::ingest) noexcept
     {
         out = {};
 
@@ -1095,6 +1219,7 @@ namespace YamahaLmVoiceDump
         parseMixerTail8101 (frame, frameSize, out);
 
 #if JUCE_DEBUG
+        if (mode == Lm8101ParseMode::auditDebug)
         {
             for (int e = 0; e < 4; ++e)
             {
@@ -1138,19 +1263,23 @@ namespace YamahaLmVoiceDump
         return true;
     }
 
-    inline bool parseLm8101VcMinimal (const void* data, size_t dataSize, Lm8101VcMinimal& out) noexcept
+    inline bool parseLm8101VcMinimal (const void* data,
+                                      size_t dataSize,
+                                      Lm8101VcMinimal& out,
+                                      Lm8101ParseMode mode = Lm8101ParseMode::ingest) noexcept
     {
         const auto block = findLmBlock (data, dataSize, "8101VC");
-        return block.data != nullptr && parseLm8101VcMinimal (block.data, block.size, out);
+        return block.data != nullptr && parseLm8101VcMinimal (block.data, block.size, out, mode);
     }
 
     inline bool parseLm8101VcMinimalFromSysexMessages (const juce::Array<juce::MidiMessage>& messages,
-                                                       Lm8101VcMinimal& out) noexcept
+                                                       Lm8101VcMinimal& out,
+                                                       Lm8101ParseMode mode = Lm8101ParseMode::ingest) noexcept
     {
         {
             const auto block = findLmBlockInSysexMessages (messages, "8101VC");
 
-            if (block.data != nullptr && parseLm8101VcMinimal (block.data, block.size, out))
+            if (block.data != nullptr && parseLm8101VcMinimal (block.data, block.size, out, mode))
             {
                 auditLm8101MixerAnchor (block.data, block.size);
                 return true;
@@ -1173,7 +1302,7 @@ namespace YamahaLmVoiceDump
                 {
                     const auto block = findLmBlock (raw, (size_t) rawN, "8101VC");
 
-                    if (block.data != nullptr && parseLm8101VcMinimal (block.data, block.size, out))
+                    if (block.data != nullptr && parseLm8101VcMinimal (block.data, block.size, out, mode))
                     {
                         auditLm8101MixerAnchor (block.data, block.size);
                         return true;
@@ -1184,7 +1313,7 @@ namespace YamahaLmVoiceDump
                     const auto* w = static_cast<const uint8*> (wrapped.getData());
                     const auto block = findLmBlock (w, wrapped.getSize(), "8101VC");
 
-                    if (block.data != nullptr && parseLm8101VcMinimal (block.data, block.size, out))
+                    if (block.data != nullptr && parseLm8101VcMinimal (block.data, block.size, out, mode))
                     {
                         auditLm8101MixerAnchor (block.data, block.size);
                         return true;
@@ -1204,7 +1333,7 @@ namespace YamahaLmVoiceDump
             {
                 const auto block = findLmBlock (d, (size_t) n, "8101VC");
 
-                if (block.data != nullptr && parseLm8101VcMinimal (block.data, block.size, out))
+                if (block.data != nullptr && parseLm8101VcMinimal (block.data, block.size, out, mode))
                 {
                     auditLm8101MixerAnchor (block.data, block.size);
                     return true;
@@ -1222,7 +1351,7 @@ namespace YamahaLmVoiceDump
             const auto* w = static_cast<const uint8*> (wrapped.getData());
             const auto block = findLmBlock (w, wrapped.getSize(), "8101VC");
 
-            if (block.data != nullptr && parseLm8101VcMinimal (block.data, block.size, out))
+            if (block.data != nullptr && parseLm8101VcMinimal (block.data, block.size, out, mode))
             {
                 auditLm8101MixerAnchor (block.data, block.size);
                 return true;
@@ -1235,7 +1364,7 @@ namespace YamahaLmVoiceDump
         {
             const auto block = findLmBlock (concat.getData(), concat.getSize(), "8101VC");
 
-            if (block.data != nullptr && parseLm8101VcMinimal (block.data, block.size, out))
+            if (block.data != nullptr && parseLm8101VcMinimal (block.data, block.size, out, mode))
             {
                 auditLm8101MixerAnchor (block.data, block.size);
                 return true;
@@ -1383,8 +1512,11 @@ namespace YamahaLmVoiceDump
         if (p.atpbrRaw >= 0)
             s << " ATPBR=" << p.atpbrRaw;
 
-        if (p.aftmdRaw >= 0)
-            s << " AFTMD=" << p.aftmdRaw;
+        if (p.efsdlvE1Raw >= 0)
+            s << " EFSDLV_E1=" << p.efsdlvE1Raw;
+
+        if (p.efsdlvE2Raw >= 0)
+            s << " EFSDLV_E2=" << p.efsdlvE2Raw;
 
         return s;
     }
@@ -1533,7 +1665,8 @@ namespace YamahaLmVoiceDump
         debugSelfTestLogIntMismatch ("LM0040", "WLLML", fileParsed.wllmlRaw, liveParsed.wllmlRaw, ok);
         debugSelfTestLogIntMismatch ("LM0040", "MCTUN", fileParsed.mctunRaw, liveParsed.mctunRaw, ok);
         debugSelfTestLogIntMismatch ("LM0040", "RNDP", fileParsed.rndpRaw, liveParsed.rndpRaw, ok);
-        debugSelfTestLogIntMismatch ("LM0040", "AFTMD", fileParsed.aftmdRaw, liveParsed.aftmdRaw, ok);
+        debugSelfTestLogIntMismatch ("LM0040", "EFSDLV_E1", fileParsed.efsdlvE1Raw, liveParsed.efsdlvE1Raw, ok);
+        debugSelfTestLogIntMismatch ("LM0040", "EFSDLV_E2", fileParsed.efsdlvE2Raw, liveParsed.efsdlvE2Raw, ok);
         debugSelfTestLogIntMismatch ("LM0040", "SPTPNT", fileParsed.sptpntRaw, liveParsed.sptpntRaw, ok);
         debugSelfTestLogIntMismatch ("LM0040", "EFMODE", fileParsed.efmodeRaw, liveParsed.efmodeRaw, ok);
 
@@ -1547,7 +1680,7 @@ namespace YamahaLmVoiceDump
         Lm8101VcMinimal parsedFile;
         Lm8101VcMinimal parsedLive;
 
-        if (! parseLm8101VcMinimal (frame, frameSize, parsedFile))
+        if (! parseLm8101VcMinimal (frame, frameSize, parsedFile, Lm8101ParseMode::auditDebug))
         {
             juce::Logger::writeToLog ("[LM8101 self-test] direct parse failed (frameSize="
                                       + juce::String (frameSize) + ")");

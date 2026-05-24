@@ -30,27 +30,33 @@
 #include "Sy99BulkLibraryCapture.h"
 #include "Sy99LibrarySyncEngine.h"
 #include "Sy99DumpRequest.h"
+#include "Sy99Lazy0040Fetch.h"
 #include "DeviceModel.h"
 #include "MidiStreamLogger.h"
+#include "Sy99Ui.h"
 
-namespace LibrarySyncUi
+inline String librarySyncTitleUi (int done, int total, bool fullLibrary, int phaseIndex = -1) noexcept
 {
-    inline String txt (const char* utf8) noexcept
+    const int pct = total > 0 ? jlimit (0, 100, (done * 100) / total) : 0;
+
+    if (fullLibrary)
     {
-        return String::fromUTF8 (utf8);
+        String title = Sy99Ui::tr (u8"Полная синхронизация: ") + String (done) + " / " + String (total)
+                       + "  (" + String (pct) + "%)";
+
+        if (phaseIndex >= 0)
+        {
+            const String phaseLabel = sy99FullLibrarySyncPhaseUserLabel (phaseIndex);
+
+            if (phaseLabel.isNotEmpty())
+                title += " — " + phaseLabel;
+        }
+
+        return title;
     }
 
-    inline String syncTitle (int done, int total, bool fullLibrary) noexcept
-    {
-        const int pct = total > 0 ? jlimit (0, 100, (done * 100) / total) : 0;
-
-        if (fullLibrary)
-            return txt (u8"Полная синхронизация: ") + String (done) + " / " + String (total)
-                   + "  (" + String (pct) + "%)";
-
-        return txt (u8"Синхронизация: ") + String (done) + txt (u8" из ") + String (total)
-               + "  (" + String (pct) + "%)";
-    }
+    return Sy99Ui::tr (u8"Синхронизация: ") + String (done) + Sy99Ui::tr (u8" из ") + String (total)
+           + "  (" + String (pct) + "%)";
 }
 
 
@@ -76,6 +82,12 @@ struct LibrairiePage   : public Component, public Button::Listener, private Asyn
         btMulti.addListener (this);
         addAndMakeVisible(labelInfoLine);
         labelInfoLine.setJustificationType (Justification::centredLeft);
+        labelInfoLine.setInterceptsMouseClicks (false, false);
+        labelInfoLine.setFont (Font (12.0f));
+        labelInfoLine.setMinimumHorizontalScale (0.55f);
+        labelInfoLine.setColour (Label::backgroundColourId, Colour (0xff2a2a2a));
+        labelInfoLine.setColour (Label::outlineColourId, Colour (0xff505050));
+        labelInfoLine.setColour (Label::textColourId, Colours::white);
         
         addChildComponent (labelAutoSyncBanner);
         labelAutoSyncBanner.setInterceptsMouseClicks (false, false);
@@ -138,22 +150,25 @@ struct LibrairiePage   : public Component, public Button::Listener, private Asyn
         {
             auto openSlot = [page, mm]
             {
+                if (libraryPageIsMulti (page))
+                {
+                    selectLibrarySlotWithEditor (page, mm);
+                    return;
+                }
+
                 if (sy99ShouldUseSy99SlotEditor())
                 {
                     selectLibrarySlotWithEditor (page, mm);
                     return;
                 }
 
-                if (libraryPageIsMulti (page))
-                    selectLibraryPageSlotExclusive (mm / 16, mm % 16);
-                else
-                    selectLibraryVoiceSlot (mm % 16, (mm / 16) * 16);
+                selectLibraryVoiceSlot (mm % 16, (mm / 16) * 16);
             };
 
             if (libraryPageIsMulti (page) || libraryVoiceSuppressProgramChangeSend())
                 openSlot();
             else
-                tryLeaveEditorContext (openSlot);
+                tryLeaveEditorContext (openSlot, mm);
         };
 
         librarySynthPanelNavigateCallback() = [this] (Sy99LibraryContentPage page, int mm)
@@ -189,6 +204,16 @@ struct LibrairiePage   : public Component, public Button::Listener, private Asyn
                                    dontSendNotification);
         };
 
+        sy99BankClick0040FetchCallback() = [this] (int globalMm, uint8 memoryType)
+        {
+            beginBankClick0040Fetch (globalMm, memoryType);
+        };
+
+        sy99AnyLibrarySyncActiveCallback() = []
+        {
+            return sy99AnyLibrarySyncActive();
+        };
+
         auto& syncHost = sy99LibrarySyncHost();
         syncHost.requestUiRefresh = [this] { triggerAsyncUpdate(); };
         syncHost.preparePhaseOnUi = [this] (int phaseIndex)
@@ -201,22 +226,27 @@ struct LibrairiePage   : public Component, public Button::Listener, private Asyn
         syncHost.finishAuto64OnUi = [this] (const File& saved) { finishAutoSync64OnUi (saved); };
         syncHost.failAuto64OnUi = [this] { failAutoSync64OnUi(); };
 
-        btVoice.setToggleState(true, NotificationType::dontSendNotification);
+        libraryContentPageRestoreCallback() = [this] (Sy99LibraryContentPage page)
+        {
+            switchLibraryContentPage (page);
+        };
+
+        setLibraryContentPageSilent (Sy99LibraryContentPage::internalVoices);
         
-        labelInfoLine.setText (LibrarySyncUi::txt (u8"Выберите банк слева, IMPORT или синхронизацию"),
+        labelInfoLine.setText (Sy99Ui::tr (u8"Выберите банк слева, IMPORT или синхронизацию"),
                                dontSendNotification);
         
         if (! sender.connect ("127.0.0.1", 9001)) // [4]
             Logger::writeToLog ("Error: could not connect to UDP port 9001.");
 
-        if (sy99LibrarySession().active)
+        juce::MessageManager::callAsync ([]
         {
-            switchLibraryContentPage (libraryContentPage());
-            sy99RestoreLibrarySlotFromPersistence();
-        }
-        else
+            sy99TryRestoreLibraryFromPersistenceOnce();
+        });
+
+        if (! sy99LibrarySession().active)
         {
-            labelInfoLine.setText (LibrarySyncUi::txt (u8"Запустите синхронизацию для загрузки библиотеки SY-99"),
+            labelInfoLine.setText (Sy99Ui::tr (u8"Запустите синхронизацию для загрузки библиотеки SY-99"),
                                    dontSendNotification);
         }
     }
@@ -252,23 +282,36 @@ struct LibrairiePage   : public Component, public Button::Listener, private Asyn
             bankSelectedVoiceIndex = -1;
             bankSelectedVoiceName.clear();
             switchLibraryContentPage (Sy99LibraryContentPage::internalVoices);
-            labelInfoLine.setText (LibrarySyncUi::txt (u8"Библиотека пуста — выберите .syx слева, IMPORT или синхронизацию"),
-                                   dontSendNotification);
+
+            if (! sy99LibrarySession().active && sy99CapturesDirHasOnlyHiddenSyncCaptures())
+            {
+                labelInfoLine.setText (Sy99Ui::tr (u8"Служебные AUTOSYNC в captures/ — запустите синхронизацию, затем выберите SY-99"),
+                                       dontSendNotification);
+            }
+            else
+            {
+                labelInfoLine.setText (Sy99Ui::tr (u8"Библиотека пуста — выберите .syx слева, IMPORT или синхронизацию"),
+                                       dontSendNotification);
+            }
         }
         else if (bankSelected.isEmpty() || arrayListVoices.isEmpty())
         {
             bankSelectedVoiceIndex = -1;
             bankSelectedVoiceName.clear();
-            labelInfoLine.setText (LibrarySyncUi::txt (u8"Выберите банк слева или запустите синхронизацию"),
+            labelInfoLine.setText (Sy99Ui::tr (u8"Выберите банк слева или запустите синхронизацию"),
                                    dontSendNotification);
         }
         else
         {
             labelInfoLine.setText (bankSelected + " — "
                                    + String (arrayListVoices.size())
-                                   + LibrarySyncUi::txt (u8" голосов"),
+                                   + Sy99Ui::tr (u8" голосов")
+                                   + sy99LibraryNavMismatchHintSuffix(),
                                    dontSendNotification);
         }
+
+        if (sy99LibrarySession().active && sy99IsSy99LibrarySessionBankLabel (bankSelected))
+            sy99TryRestoreLibraryFromPersistenceOnce();
 
         repaint();
     }
@@ -296,9 +339,10 @@ struct LibrairiePage   : public Component, public Button::Listener, private Asyn
         const int syncPanelTop = 36;
         const int syncPanelH = syncPanel ? 58 : 0;
         const int syncPanelW = juce::jmax (200, getWidth() - tableWidth - 24);
-        const int bottomBarH = 24;
+        const int bottomBarH = 36;
+        const int bottomBarPad = 4;
         const int voicesTop = syncPanel ? (syncPanelTop + syncPanelH + 6) : 44;
-        const int contentBottom = getHeight() - bottomBarH - 6;
+        const int contentBottom = getHeight() - bottomBarH - bottomBarPad * 2;
         const int voicesH = juce::jmax (80, contentBottom - voicesTop);
         const int gridLeft = tableWidth + 16;
         const int gridW = tableWidth * 4 + 30;
@@ -330,9 +374,12 @@ struct LibrairiePage   : public Component, public Button::Listener, private Asyn
         voicesListC.resized();
         voicesListD.resized();
 
-        bankList.setBounds(8, 10, tableWidth, getHeight()-20);
-        labelInfoLine.setBounds (8, getHeight() - bottomBarH, getWidth() - 16, bottomBarH - 2);
-        
+        bankList.setBounds (8, 10, tableWidth, juce::jmax (40, getHeight() - bottomBarH - bottomBarPad * 2 - 10));
+        labelInfoLine.setBounds (8,
+                                 getHeight() - bottomBarH - bottomBarPad,
+                                 getWidth() - 16,
+                                 bottomBarH);
+        labelInfoLine.toFront (false);
     }
 
     void applySyncPanelText (const String& title, const String& detail) noexcept
@@ -340,6 +387,11 @@ struct LibrairiePage   : public Component, public Button::Listener, private Asyn
         labelAutoSyncBanner.setText (title, dontSendNotification);
         labelAutoSyncDetail.setText (detail, dontSendNotification);
         labelInfoLine.setText (detail.isNotEmpty() ? detail : title, dontSendNotification);
+
+        labelAutoSyncBanner.repaint();
+        labelAutoSyncDetail.repaint();
+        labelInfoLine.repaint();
+        autoSyncProgressBar.repaint();
     }
 
     void setAutoSyncPanelVisible (bool visible) noexcept
@@ -390,12 +442,34 @@ struct LibrairiePage   : public Component, public Button::Listener, private Asyn
         resetLibraryRecallContext();
         highlightLibraryVoiceSlot (-1);
 
-        btVoice.setToggleState (page == Sy99LibraryContentPage::internalVoices, dontSendNotification);
-        btPreset1.setToggleState (page == Sy99LibraryContentPage::preset1Voices, dontSendNotification);
-        btPreset2.setToggleState (page == Sy99LibraryContentPage::preset2Voices, dontSendNotification);
-        btMulti.setToggleState (page == Sy99LibraryContentPage::multiInternal
-                                || page == Sy99LibraryContentPage::multiPreset,
-                                dontSendNotification);
+        // Radio group 77: reset all tabs, then light exactly one (avoid stale VOICE highlight).
+        btVoice.setToggleState (false, dontSendNotification);
+        btPreset1.setToggleState (false, dontSendNotification);
+        btPreset2.setToggleState (false, dontSendNotification);
+        btMulti.setToggleState (false, dontSendNotification);
+
+        switch (page)
+        {
+            case Sy99LibraryContentPage::preset1Voices:
+                btPreset1.setToggleState (true, dontSendNotification);
+                break;
+            case Sy99LibraryContentPage::preset2Voices:
+                btPreset2.setToggleState (true, dontSendNotification);
+                break;
+            case Sy99LibraryContentPage::multiInternal:
+            case Sy99LibraryContentPage::multiPreset:
+                btMulti.setToggleState (true, dontSendNotification);
+                break;
+            case Sy99LibraryContentPage::internalVoices:
+            default:
+                btVoice.setToggleState (true, dontSendNotification);
+                break;
+        }
+
+        btVoice.repaint();
+        btPreset1.repaint();
+        btPreset2.repaint();
+        btMulti.repaint();
 
         for (auto* lb : { &voicesListA.sourceListBox, &voicesListB.sourceListBox,
                           &voicesListC.sourceListBox, &voicesListD.sourceListBox })
@@ -405,6 +479,29 @@ struct LibrairiePage   : public Component, public Button::Listener, private Asyn
         voicesListB.resized();
         voicesListC.resized();
         voicesListD.resized();
+        repaintSyncColumnHeaders();
+    }
+
+    void repaintSyncColumnHeaders() noexcept
+    {
+        for (auto* lb : { &voicesListA.sourceListBox, &voicesListB.sourceListBox,
+                          &voicesListC.sourceListBox, &voicesListD.sourceListBox })
+            if (auto* header = lb->getHeaderComponent())
+                header->repaint();
+    }
+
+    void applyPendingSyncPhaseUiIfNeeded() noexcept
+    {
+        if (! sy99FullLibrarySyncSession().active)
+            return;
+
+        const int phaseIndex = sy99FullLibrarySyncSession().phaseIndex;
+
+        if (phaseIndex == syncUiDisplayedPhaseIndex)
+            return;
+
+        prepareLibrarySyncPhase (sy99FullLibrarySyncPhaseAt (phaseIndex));
+        syncUiDisplayedPhaseIndex = phaseIndex;
     }
 
     void relayoutSyncVoiceListsLight() noexcept
@@ -458,7 +555,7 @@ struct LibrairiePage   : public Component, public Button::Listener, private Asyn
                 }
             }
 
-            applySyncPanelText (LibrarySyncUi::syncTitle (s.requestsCompleted, total, true), detail);
+            applySyncPanelText (librarySyncTitleUi (s.requestsCompleted, total, true, s.phaseIndex), detail);
 
             const bool gridTick = forceGridRefresh
                                   || (s.requestsCompleted > 0
@@ -494,7 +591,7 @@ struct LibrairiePage   : public Component, public Button::Listener, private Asyn
             }
         }
 
-        applySyncPanelText (LibrarySyncUi::syncTitle (s.loadedCount, total, false), detail);
+        applySyncPanelText (librarySyncTitleUi (s.loadedCount, total, false), detail);
 
         const bool gridTick = forceGridRefresh
                               || (s.loadedCount > 0
@@ -537,6 +634,9 @@ struct LibrairiePage   : public Component, public Button::Listener, private Asyn
         setLibraryContentPageSilent (page);
         resetLibraryRecallContext();
 
+        if (auto& bankSelect = libraryPageBankSelectCallback(); bankSelect != nullptr)
+            bankSelect (page);
+
         if (sy99LibrarySession().active && sy99IsSy99LibrarySessionBankLabel (bankSelected))
             sy99EnsureLibraryPageSlotNames (page);
 
@@ -550,18 +650,27 @@ struct LibrairiePage   : public Component, public Button::Listener, private Asyn
 
     void prepareLibrarySyncPhase (const Sy99LibrarySyncPhase& phase) noexcept
     {
-        if (! phase.switchesLibraryPage)
-            return;
+        if (phase.switchesLibraryPage)
+        {
+            const auto page = libraryContentPageFromId (phase.libraryPage);
 
-        const auto page = libraryContentPageFromId (phase.libraryPage);
+            if (sy99AnyLibrarySyncActive())
+                setLibraryContentPageSilent (page);
+            else
+                switchLibraryContentPage (page);
+
+            if (phase.updatesVoicePreview)
+                beginLibraryPagePreview (page, phase.mmCount);
+        }
 
         if (sy99AnyLibrarySyncActive())
-            setLibraryContentPageSilent (page);
-        else
-            switchLibraryContentPage (page);
-
-        if (phase.updatesVoicePreview)
-            beginLibraryPagePreview (page, phase.mmCount);
+        {
+            relayoutSyncVoiceListsLight();
+            repaintSyncColumnHeaders();
+            resized();
+            tickLibrarySyncProgressUi ({}, true);
+            repaint();
+        }
     }
 
     void updateAutoSyncProgressUi (const String& phaseDetail = {}) noexcept
@@ -635,6 +744,8 @@ struct LibrairiePage   : public Component, public Button::Listener, private Asyn
     /** Coalesced UI tick: progress bar + one list row (no per-slot callAsync queue). */
     void refreshLibrarySyncUiLight() noexcept
     {
+        applyPendingSyncPhaseUiIfNeeded();
+
         if (sy99FullLibrarySyncSession().active)
         {
             auto& s = sy99FullLibrarySyncSession();
@@ -669,8 +780,9 @@ struct LibrairiePage   : public Component, public Button::Listener, private Asyn
                     repaintOneSyncVoiceSlot (showMm);
             }
 
-            applySyncPanelText (LibrarySyncUi::syncTitle (s.requestsCompleted, total, true), detail);
+            applySyncPanelText (librarySyncTitleUi (s.requestsCompleted, total, true, s.phaseIndex), detail);
             autoSyncProgressBar.repaint();
+            repaint();
             return;
         }
 
@@ -679,8 +791,8 @@ struct LibrairiePage   : public Component, public Button::Listener, private Asyn
         if (! s.active)
             return;
 
-        const int total = kSy99AutoSyncInternalVoiceCount;
-        autoSyncProgressValue = total > 0 ? (double) s.loadedCount / (double) total : 0.0;
+        const int total = kSy99AutoSync64TotalSteps;
+        autoSyncProgressValue = total > 0 ? (double) s.stepsCompleted / (double) total : 0.0;
 
         const int showMm = s.currentMm;
         String detail = sy99AutoSync64SlotLabel (showMm);
@@ -697,73 +809,96 @@ struct LibrairiePage   : public Component, public Button::Listener, private Asyn
         if (slotName.isNotEmpty())
             detail += "  \"" + slotName + "\"";
 
-        applySyncPanelText (LibrarySyncUi::syncTitle (s.loadedCount, total, false), detail);
+        if (s.subStep == Sy99AutoSync64SubStep::wait0040)
+            detail += "  0040";
+
+        applySyncPanelText (librarySyncTitleUi (s.stepsCompleted, total, false), detail);
         repaintOneSyncVoiceSlot (showMm);
         autoSyncProgressBar.repaint();
+        repaint();
     }
 
     void finishFullLibrarySyncOnUi() noexcept
     {
         auto& s = sy99FullLibrarySyncSession();
         bulkSessionSaveCount += s.savedFiles.size();
+        const int requestsDone = s.requestsCompleted;
+        const int fileCount = s.savedFiles.size();
+        const bool extended = s.includeExtendedPhases;
+        juce::Array<juce::File> savedCopy;
+        savedCopy.addArray (s.savedFiles);
+
+        endFullLibrarySyncSession (true);
+        sy99InvalidateSy99LibrarySessionCaches();
+        sy99DrainPendingBankClick0040Fetch();
 
         if (bankList.activateSy99LibrarySession())
         {
-            sy99RefreshSy99LibraryNamesFromSession (s.includeExtendedPhases);
+            sy99RefreshSy99LibraryNamesFromSession (extended);
             refreshAutoSyncVoiceLists();
             switchLibraryContentPage (Sy99LibraryContentPage::internalVoices);
+            libraryVoiceSuppressAutoSlotOpen() = true;
             sy99RestoreLibrarySlotFromPersistence();
+            libraryVoiceSuppressAutoSlotOpen() = false;
         }
         else
             bankList.reloadAfterLibraryFileAdded();
 
-        applySyncPanelText (LibrarySyncUi::txt (u8"Полная синхронизация завершена"),
-                            String (s.savedFiles.size()) + LibrarySyncUi::txt (u8" файлов .syx"));
-        labelInfoLine.setText (LibrarySyncUi::txt (u8"Полная синхронизация завершена: ")
-                               + String (s.requestsCompleted) + " / "
+        applySyncPanelText (Sy99Ui::tr (u8"Полная синхронизация завершена"),
+                            String (fileCount) + Sy99Ui::tr (u8" файлов .syx"));
+        labelInfoLine.setText (Sy99Ui::tr (u8"Полная синхронизация завершена: ")
+                               + String (requestsDone) + " / "
                                + String (sy99FullLibrarySyncTotalRequests())
-                               + LibrarySyncUi::txt (u8" — ")
-                               + String (s.savedFiles.size())
-                               + LibrarySyncUi::txt (u8" .syx в captures/"),
+                               + Sy99Ui::tr (u8" — ")
+                               + String (fileCount)
+                               + Sy99Ui::tr (u8" .syx в captures/"),
                                dontSendNotification);
         Logger::writeToLog ("[FullLibrarySync] Complete — "
-                            + String (s.savedFiles.size()) + " files saved");
-        sy99AuditFullLibrarySyncCaptures (s.savedFiles, s.includeExtendedPhases);
+                            + String (fileCount) + " files saved");
+        sy99AuditFullLibrarySyncCaptures (savedCopy, extended);
         relayoutSyncVoiceListsLight();
-        endFullLibrarySyncSession (true);
     }
 
     void finishAutoSync64OnUi (const File& saved) noexcept
     {
         auto& s = sy99AutoSync64Session();
+        const int stepsDone = s.stepsCompleted;
+        const int paired0040 = s.paired0040Count;
+        const int msgCount = s.loadedCount;
 
         if (saved.existsAsFile())
         {
             ++bulkSessionSaveCount;
+            endAutoSync64Session (true);
+            sy99InvalidateSy99LibrarySessionCaches();
+            sy99DrainPendingBankClick0040Fetch();
 
             if (bankList.activateSy99LibrarySession())
             {
                 refreshAutoSyncVoiceLists();
                 switchLibraryContentPage (Sy99LibraryContentPage::internalVoices);
+                libraryVoiceSuppressAutoSlotOpen() = true;
                 sy99RestoreLibrarySlotFromPersistence();
+                libraryVoiceSuppressAutoSlotOpen() = false;
             }
             else
                 bankList.selectBankFileAndReloadVoices (saved);
 
-            applySyncPanelText (LibrarySyncUi::txt (u8"Синхронизация завершена"),
+            applySyncPanelText (Sy99Ui::tr (u8"Синхронизация завершена"),
                                 saved.getFileName());
-            labelInfoLine.setText (LibrarySyncUi::txt (u8"Синхронизация завершена: загружено ")
-                                   + String (s.loadedCount) + LibrarySyncUi::txt (u8" из ")
-                                   + String (kSy99AutoSyncInternalVoiceCount)
-                                   + " — " + saved.getFileName(),
+            labelInfoLine.setText (Sy99Ui::tr (u8"Синхронизация завершена: ")
+                                   + String (stepsDone) + Sy99Ui::tr (u8" шагов, ")
+                                   + String (paired0040) + Sy99Ui::tr (u8"×0040 — ")
+                                   + saved.getFileName(),
                                    dontSendNotification);
-            Logger::writeToLog ("[AutoSync64] Saved " + saved.getFullPathName());
-            endAutoSync64Session (true);
+            Logger::writeToLog ("[AutoSync64] Saved " + saved.getFullPathName()
+                                + " (" + String (msgCount) + " msg, "
+                                + String (paired0040) + " paired 0040)");
         }
         else
         {
             endAutoSync64Session (false);
-            labelInfoLine.setText (LibrarySyncUi::txt (u8"Синхронизация: не удалось записать .syx"),
+            labelInfoLine.setText (Sy99Ui::tr (u8"Синхронизация: не удалось записать .syx"),
                                    dontSendNotification);
         }
     }
@@ -772,9 +907,9 @@ struct LibrairiePage   : public Component, public Button::Listener, private Asyn
     {
         const int mm = sy99AutoSync64Session().currentMm;
         endAutoSync64Session (false);
-        labelInfoLine.setText (LibrarySyncUi::txt (u8"Синхронизация остановлена на ")
+        labelInfoLine.setText (Sy99Ui::tr (u8"Синхронизация остановлена на ")
                                + sy99AutoSync64SlotLabel (mm)
-                               + LibrarySyncUi::txt (u8" — проверьте Bulk Protect, Device ID, MIDI"),
+                               + Sy99Ui::tr (u8" — проверьте Bulk Protect, Device ID, MIDI"),
                                dontSendNotification);
         Logger::writeToLog ("[AutoSync64] Failed mm=" + String::toHexString (mm));
     }
@@ -783,7 +918,17 @@ struct LibrairiePage   : public Component, public Button::Listener, private Asyn
     void timerCallback() override
     {
         if (sy99AnyLibrarySyncActive())
+        {
+            const juce::uint32 nowMs = juce::Time::getMillisecondCounter();
+
+            if (nowMs - syncLastPartialRxUiMs >= (juce::uint32) kSyncPartialRxUiMinMs)
+            {
+                syncLastPartialRxUiMs = nowMs;
+                refreshLibrarySyncUiLight();
+            }
+
             return;
+        }
 
         ++timeOut;
 
@@ -796,7 +941,9 @@ struct LibrairiePage   : public Component, public Button::Listener, private Asyn
                                    dontSendNotification);
         }
 
-        const int threshold = bulkCaptureIdleThresholdTicks (arraySysex.size());
+        const int threshold = bulkCaptureBankClick0040IngestOnly
+                                  ? 12
+                                  : bulkCaptureIdleThresholdTicks (arraySysex.size());
 
         if (timeOut <= threshold)
             return;
@@ -812,7 +959,7 @@ struct LibrairiePage   : public Component, public Button::Listener, private Asyn
                 bulkCaptureDumpRequestRetried = true;
                 timeOut = 0;
                 sendPendingDumpRequest();
-                labelInfoLine.setText ("No reply to variant A — retrying dump request variant B…",
+                labelInfoLine.setText (Sy99Ui::dumpRetryVariantB(),
                                        dontSendNotification);
                 Logger::writeToLog ("[DumpReq] Timeout variant A — retry variant B case="
                                     + bulkCaptureDumpRequestCaseTag);
@@ -828,6 +975,13 @@ struct LibrairiePage   : public Component, public Button::Listener, private Asyn
             endBulkCaptureSession (false);
             labelInfoLine.setText ("Dump: no SysEx received — check MIDI in + Bulk Protect",
                                    dontSendNotification);
+            return;
+        }
+
+        if (bulkCaptureBankClick0040IngestOnly)
+        {
+            finishBankClick0040FetchFromBuffer();
+            endBulkCaptureSession (true);
             return;
         }
 
@@ -906,6 +1060,9 @@ struct LibrairiePage   : public Component, public Button::Listener, private Asyn
         const String dumpCaseTag = bulkCaptureDumpRequestCaseTag;
         const bool dumpRetried = bulkCaptureDumpRequestRetried;
 
+        sy99BankClick0040CaptureActive() = false;
+        bulkCaptureBankClick0040IngestOnly = false;
+
         stopTimer();
         requestSysex = false;
         newMessage = false;
@@ -926,11 +1083,7 @@ struct LibrairiePage   : public Component, public Button::Listener, private Asyn
         }
         else if (wasDumpRequest && bulkSessionSaveCount == 0)
         {
-            labelInfoLine.setText ("SY99 не ответил на dump request (case " + dumpCaseTag
-                                   + ", variants A"
-                                   + (dumpRetried ? "+B" : String())
-                                   + "). Bulk Protect=OFF, Engine=01, MIDI In+Out открыты. "
-                                   + "Смотрите [TX] в MIDI monitor и [DumpReq] в логе.",
+            labelInfoLine.setText (Sy99Ui::dumpRequestNoReply (dumpCaseTag, dumpRetried),
                                    dontSendNotification);
         }
         else if (! hadData && bulkSessionSaveCount == 0)
@@ -990,9 +1143,70 @@ struct LibrairiePage   : public Component, public Button::Listener, private Asyn
                           Sy99BulkCaptureSessionMode::singleAutoClose);
         sendPendingDumpRequest();
 
-        labelInfoLine.setText ("8101 dump request sent (case " + caseTag
-                               + ") — смотрите [TX] в MIDI monitor, ждём ответ SY99…",
+        labelInfoLine.setText (Sy99Ui::dumpRequest8101Sent (caseTag),
                                dontSendNotification);
+    }
+
+    void beginBankClick0040Fetch (int globalMm, uint8 memoryType) noexcept
+    {
+        if (sy99BankClick0040CaptureActive())
+        {
+            Logger::writeToLog ("[BankClick] fetch0040 blocked: capture already active");
+            return;
+        }
+
+        if (requestSysex || sy99AnyLibrarySyncActive())
+        {
+            sy99DeferBankClick0040Fetch (globalMm, memoryType);
+            return;
+        }
+
+        if (auto& portStatus = sy99MidiPortStatusCallback(); portStatus != nullptr)
+        {
+            if (portStatus().isNotEmpty())
+            {
+                Logger::writeToLog ("[BankClick] fetch0040 blocked: " + portStatus());
+                return;
+            }
+        }
+
+        bulkCaptureBankClick0040IngestOnly = true;
+        bulkCapturePendingDumpRequest = true;
+        // SYM7 patch invoke: 0040VC 31 B (mm @ byte 29), not 8101VC — see sym7_captures/.
+        bulkCaptureSym78101Request = true;
+        bulkCaptureSym78101LmType = "0040VC";
+        bulkCaptureSym78101Byte28 = memoryType;
+        bulkCaptureDumpRequestCaseTag = "bankclick-0040";
+        bulkCaptureDumpRequestMt = memoryType;
+        bulkCaptureDumpRequestMm = (uint8) juce::jlimit (0, 63, globalMm);
+        bulkCaptureDumpRequestTailVariant = sy99DumpRequestTailMtMmChecksum;
+        bulkCaptureDumpRequestRetried = false;
+        sy99BankClick0040CaptureActive() = true;
+
+        beginBulkCapture (Sy99BulkCaptureKind::voiceSingle,
+                          Sy99BulkCaptureSessionMode::singleAutoClose);
+        sendPendingDumpRequest();
+
+        Logger::writeToLog ("[BankClick] fetch0040 TX 0040VC b28="
+                            + String::toHexString ((int) memoryType).paddedLeft ('0', 2)
+                            + " mm="
+                            + String::toHexString (bulkCaptureDumpRequestMm).paddedLeft ('0', 2));
+    }
+
+    void finishBankClick0040FetchFromBuffer() noexcept
+    {
+        sy99BankClick0040CaptureActive() = false;
+        bulkCaptureBankClick0040IngestOnly = false;
+
+        if (arraySysex.isEmpty())
+        {
+            Logger::writeToLog ("[BankClick] fetch0040: empty RX");
+            arraySysex.clear();
+            return;
+        }
+
+        finishBankClick0040IngestFromMessages (arraySysex);
+        arraySysex.clear();
     }
 
     void beginBulkCaptureWithDumpRequest (const String& caseTag,
@@ -1025,8 +1239,7 @@ struct LibrairiePage   : public Component, public Button::Listener, private Asyn
                           Sy99BulkCaptureSessionMode::singleAutoClose);
         sendPendingDumpRequest();
 
-        labelInfoLine.setText ("Dump request variant A sent (case " + caseTag
-                               + ") — смотрите [TX] в MIDI monitor, ждём ответ SY99…",
+        labelInfoLine.setText (Sy99Ui::dumpRequestVariantASent (caseTag),
                                dontSendNotification);
     }
 
@@ -1081,10 +1294,11 @@ struct LibrairiePage   : public Component, public Button::Listener, private Asyn
 
         setAutoSyncPanelVisible (true);
         autoSyncProgressValue = 0.0;
+        syncLastPartialRxUiMs = 0;
         Sy99LibrarySyncEngine::instance().ensureStarted();
         sy99LibrarySyncSendAuto64Request();
         triggerAsyncUpdate();
-        Logger::writeToLog ("[AutoSync64] Started — 64 programmatic voice requests");
+        Logger::writeToLog ("[AutoSync64] Started — 64×(8101VC+0040VC) interleaved → AUTOSYNC-VC-INT");
     }
 
     void endAutoSync64Session (bool success) noexcept
@@ -1116,7 +1330,9 @@ struct LibrairiePage   : public Component, public Button::Listener, private Asyn
         suppressEditorExitPrompt() = true;
         const int firstPhase = sy99LibrarySyncFirstPhaseIndex (includeExtendedPhases);
         sy99FullLibrarySyncSession().phaseIndex = firstPhase;
+        syncUiDisplayedPhaseIndex = -1;
         prepareLibrarySyncPhase (sy99FullLibrarySyncPhaseAt (firstPhase));
+        syncUiDisplayedPhaseIndex = firstPhase;
 
         bulkCaptureKind = Sy99BulkCaptureKind::receiveAll;
         bulkSessionMode = Sy99BulkCaptureSessionMode::singleAutoClose;
@@ -1137,6 +1353,7 @@ struct LibrairiePage   : public Component, public Button::Listener, private Asyn
 
         setAutoSyncPanelVisible (true);
         autoSyncProgressValue = 0.0;
+        syncLastPartialRxUiMs = 0;
         Sy99LibrarySyncEngine::instance().ensureStarted();
         sy99LibrarySyncSendFullRequest();
         triggerAsyncUpdate();
@@ -1149,6 +1366,7 @@ struct LibrairiePage   : public Component, public Button::Listener, private Asyn
     void endFullLibrarySyncSession (bool success) noexcept
     {
         suppressEditorExitPrompt() = false;
+        syncUiDisplayedPhaseIndex = -1;
         setAutoSyncPanelVisible (false);
         sy99FullLibrarySyncReset();
         endBulkCaptureSession (success);
@@ -1183,6 +1401,7 @@ struct LibrairiePage   : public Component, public Button::Listener, private Asyn
         menu.addItem (10, "Test request: Edit buffer  (0040VC mt=7F — legacy)");
         menu.addItem (11, "Test request: A1 internal (8101VC mm=00)");
         menu.addItem (12, "Test request: B1 internal (8101VC mm=10)");
+        menu.addItem (13, "Test request: A6 0040 tail (0040VC mm=05 — SYM7 BankClick)");
         menu.addSeparator();
         menu.addItem (30, "Auto-sync 64 internal voices (SYM7-style)");
         menu.addItem (31, "Auto-sync library — Voice+Preset+Multi (~2 min, SYM7)");
@@ -1199,6 +1418,8 @@ struct LibrairiePage   : public Component, public Button::Listener, private Asyn
                 beginBulkCaptureWithSym78101Request ("a1", "8101VC", 0x00);
             else if (result == 12)
                 beginBulkCaptureWithSym78101Request ("b1", "8101VC", 0x10);
+            else if (result == 13)
+                beginBulkCaptureWithSym78101Request ("a6-0040", "0040VC", 0x05);
             else if (result == 30)
                 beginAutoSync64InternalVoices();
             else if (result == 31)
@@ -1263,37 +1484,54 @@ struct LibrairiePage   : public Component, public Button::Listener, private Asyn
                 auto& sync = sy99FullLibrarySyncSession();
                 saveFullLibrarySyncCurrentPhase();
 
+                const bool hadFiles = sync.savedFiles.size() > 0 || bulkSessionSaveCount > 0;
+                endFullLibrarySyncSession (hadFiles);
+                sy99InvalidateSy99LibrarySessionCaches();
+                sy99DrainPendingBankClick0040Fetch();
+
                 if (bankList.activateSy99LibrarySession())
                 {
                     refreshAutoSyncVoiceLists();
+                    libraryVoiceSuppressAutoSlotOpen() = true;
                     sy99RestoreLibrarySlotFromPersistence();
+                    libraryVoiceSuppressAutoSlotOpen() = false;
                 }
 
-                const bool hadFiles = sync.savedFiles.size() > 0 || bulkSessionSaveCount > 0;
-                endFullLibrarySyncSession (hadFiles);
                 return;
             }
 
             if (sy99AutoSync64Session().active)
             {
+                bool ended = false;
+
                 if (sy99AutoSync64Session().accumulator.size() > 0)
                 {
                     const File saved = saveAutoSync64CombinedCapture (sy99AutoSync64Session().accumulator);
 
                     if (saved.existsAsFile())
                     {
+                        endAutoSync64Session (true);
+                        ended = true;
+                        sy99InvalidateSy99LibrarySessionCaches();
+
                         if (bankList.activateSy99LibrarySession())
                         {
                             refreshAutoSyncVoiceLists();
+                            libraryVoiceSuppressAutoSlotOpen() = true;
                             sy99RestoreLibrarySlotFromPersistence();
+                            libraryVoiceSuppressAutoSlotOpen() = false;
                         }
                         else
                             bankList.selectBankFileAndReloadVoices (saved);
+
+                        sy99DrainPendingBankClick0040Fetch();
                     }
                 }
 
-                endAutoSync64Session (sy99AutoSync64Session().accumulator.size() > 0
-                                      || bulkSessionSaveCount > 0);
+                if (! ended)
+                    endAutoSync64Session (sy99AutoSync64Session().accumulator.size() > 0
+                                          || bulkSessionSaveCount > 0);
+
                 return;
             }
 
@@ -1322,13 +1560,13 @@ struct LibrairiePage   : public Component, public Button::Listener, private Asyn
 
                 if (bankList.importSyxFileToCapturesAndActivate (file))
                 {
-                    labelInfoLine.setText (LibrarySyncUi::txt (u8"Импорт: ")
+                    labelInfoLine.setText (Sy99Ui::tr (u8"Импорт: ")
                                            + file.getFileName(),
                                            dontSendNotification);
                 }
                 else
                 {
-                    labelInfoLine.setText (LibrarySyncUi::txt (u8"Импорт не удался: ")
+                    labelInfoLine.setText (Sy99Ui::tr (u8"Импорт не удался: ")
                                            + file.getFileName(),
                                            dontSendNotification);
                 }
@@ -1536,6 +1774,7 @@ private:
     Sy99BulkCaptureSessionMode bulkSessionMode { Sy99BulkCaptureSessionMode::singleAutoClose };
     int bulkSessionSaveCount = 0;
     juce::uint32 syncLastPartialRxUiMs = 0;
+    int syncUiDisplayedPhaseIndex = -1;
 
     bool bulkCapturePendingDumpRequest = false;
     bool bulkCaptureSym78101Request = false;
@@ -1546,7 +1785,8 @@ private:
     String bulkCaptureDumpRequestCaseTag;
     uint8 bulkCaptureDumpRequestMt = 0;
     uint8 bulkCaptureDumpRequestMm = 0;
-    
+    bool bulkCaptureBankClick0040IngestOnly = false;
+
 };
 //==============================================================================
 

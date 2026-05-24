@@ -196,7 +196,7 @@ namespace Sy99ParamRegistry
               cf (true, true,  false, false, false) },
             { Id::EFSDLV,   "EFSDLV",   true,  "Effect Send Level",         "Mixer",
               { 0x03, 0x00, 0x00, 0x0A, true  }, 0,  127, identityDecode, identityEncode, {},
-              cf (true, true,  false, false, false) },
+              cf (true, true,  true,  false, false) },
             { Id::EFSDVSNS, "EFSDVSNS", true,  "Effect Send Vel Sense",     "Mixer",
               { 0x03, 0x00, 0x00, 0x0B, true  }, 0,  127, decodeEfsdvsns, encodeEfsdvsns, {},
               cf (true, false, false, false, false) },
@@ -930,14 +930,18 @@ namespace Sy99ParamRegistry
                 && YamahaLmVoiceDump::maxElnsAnchorSlotsFromElmodeRaw (s.lmElmodeRaw) >= 1;
         }
 
-        /** OUTSEL E1 @ ELVL+1 shares ELDT byte; anchor E2 OUTSEL is reliable (fixtures 01–03 lcd both/both). */
+        /** OUTSEL E1 @ ELVL+1 may share ELDT in bit0; use E2 anchor only when E1 reads off but E2 has routing. */
         int reconciledOutselE1Bulk8101 (const YamahaLmVoiceDump::Lm8101VcMinimal& p) noexcept
         {
             int outselE1 = p.lmOutselE1Raw;
 
+            if (outselE1 < 0)
+                return -1;
+
             if (YamahaLmVoiceDump::eldtE1UsesOutselStrip (p.elmodeRaw)
                 && p.lmOutselRaw[1] >= 0
-                && outselE1 != p.lmOutselRaw[1])
+                && outselE1 == 0
+                && p.lmOutselRaw[1] != 0)
                 outselE1 = p.lmOutselRaw[1];
 
             return outselE1;
@@ -2175,7 +2179,7 @@ namespace Sy99ParamRegistry
             case Id::WLLML:     r.live = &s.liveWllmlRaw;      r.bulk0040 = &s.lm0040WllmlRaw;  break;
             case Id::MCTUN:     r.live = &s.liveMctunRaw;      r.bulk0040 = &s.lm0040MctunRaw;  break;
             case Id::RNDP:      r.live = &s.liveRndpRaw;       r.bulk0040 = &s.lm0040RndpRaw;   break;
-            case Id::AFTMD:     r.live = &s.liveAftmdRaw;      r.bulk0040 = &s.lm0040AftmdRaw;  break;
+            case Id::AFTMD:     r.live = &s.liveAftmdRaw;      break;
             case Id::SPTPNT:    r.live = &s.liveSptpntRaw;     r.bulk0040 = &s.lm0040SptpntRaw; break;
 
             case Id::ELVL:
@@ -2248,8 +2252,8 @@ namespace Sy99ParamRegistry
                 {
                     r.live = &s.elementEfsendselRaw[(size_t) elementIndex];
 
-                    if (elementIndex == 0
-                        || (elementIndex == 1 && efsendEl2SharesEl1Bulk8101 (s)))
+                    // Bulk 8101 only locates EFLN for El.1; El.2+ use live 03 20/40/60 00 09.
+                    if (elementIndex == 0)
                         r.bulk8101 = &s.lmEfln1ElRaw;
                 }
                 break;
@@ -2260,8 +2264,14 @@ namespace Sy99ParamRegistry
                     r.live = &s.elementEfsendlvlRaw[(size_t) elementIndex];
 
                     if (elementIndex == 0
-                        || (elementIndex == 1 && efsendEl2SharesEl1Bulk8101 (s)))
+                        && YamahaLmVoiceDump::efsendBulk0040E1TrustedForElmodeRaw (s.lmElmodeRaw))
+                        r.bulk0040 = &s.lm0040EfsdlvE1Raw;
+                    else if (elementIndex == 0
+                             && YamahaLmVoiceDump::efsendBulk8101FallbackForElmodeRaw (s.lmElmodeRaw))
                         r.bulk8101 = &s.lmEfsdlvRaw;
+                    else if (elementIndex == 1
+                             && YamahaLmVoiceDump::efsendBulk0040E2TrustedForElmodeRaw (s.lmElmodeRaw))
+                        r.bulk0040 = &s.lm0040EfsdlvE2Raw;
                 }
                 break;
 
@@ -2326,7 +2336,15 @@ namespace Sy99ParamRegistry
         const int bulk8101Resolved = bulk8101ForResolve (*m, bulk8101Raw);
         const int bulk0040Resolved = bulk0040ForResolve (*m, bulk0040Raw);
 
-        if (id == Id::ELNS)
+        if (m->confidence.confirmedBulk0040
+            && ! m->confidence.confirmedBulk8101
+            && s.hasParsedBulk0040
+            && bulk0040Resolved >= 0)
+        {
+            src = LiveSynthState::ParamSource::Bulk0040;
+            resolved = bulk0040Resolved;
+        }
+        else if (id == Id::ELNS)
         {
             if (bulkFirst)
                 resolved = resolveElnsIntBulkFirst (liveRaw,
@@ -2351,6 +2369,45 @@ namespace Sy99ParamRegistry
                                            m->confidence.confirmedBulk8101 ? bulk8101Raw : -1,
                                            bulk0040Resolved,
                                            src);
+        }
+        else if (id == Id::EFSDLV
+                 && elementIndex == 0
+                 && YamahaLmVoiceDump::efsendBulk0040E1TrustedForElmodeRaw (s.lmElmodeRaw))
+        {
+            // elmode 4/8: 0040 @100; 8101 @efln+12 is poison on NiteHwk (76 vs LCD 127).
+            const int bulk0040ResolvedE1 = bulk0040ForResolve (*m, bulk0040Raw);
+
+            if (bulk0040ResolvedE1 >= 0 && s.hasParsedBulk0040)
+            {
+                src = LiveSynthState::ParamSource::Bulk0040;
+                resolved = bulk0040ResolvedE1;
+            }
+            else if (s.lmElmodeRaw == 4 && bulk8101Resolved >= 0)
+            {
+                src = LiveSynthState::ParamSource::Bulk8101;
+                resolved = bulk8101Resolved;
+            }
+            else if (bulkFirst)
+                resolved = resolveIntBulkFirst (liveRaw, bulk8101Resolved, bulk0040ResolvedE1, src);
+            else
+                resolved = LiveSynthState::resolveInt (liveRaw, bulk8101Resolved, bulk0040ResolvedE1, src);
+        }
+        else if (id == Id::EFSDLV
+                 && elementIndex == 1
+                 && YamahaLmVoiceDump::efsendBulk0040E2TrustedForElmodeRaw (s.lmElmodeRaw))
+        {
+            const int bulk8101Ignored = -1;
+            const int bulk0040ResolvedE2 = bulk0040ForResolve (*m, bulk0040Raw);
+
+            if (bulk0040ResolvedE2 >= 0 && s.hasParsedBulk0040)
+            {
+                src = LiveSynthState::ParamSource::Bulk0040;
+                resolved = bulk0040ResolvedE2;
+            }
+            else if (bulkFirst)
+                resolved = resolveIntBulkFirst (liveRaw, bulk8101Ignored, bulk0040ResolvedE2, src);
+            else
+                resolved = LiveSynthState::resolveInt (liveRaw, bulk8101Ignored, bulk0040ResolvedE2, src);
         }
         else if (bulkFirst)
         {
@@ -2436,6 +2493,12 @@ namespace Sy99ParamRegistry
         if (isEfsendAuditId (id))
             debugLogEfsendAuditResolveImpl (id, elementIndex, liveRaw, bulk8101Raw, bulk0040Raw, resolved, src);
 #endif
+
+        if (id == Id::OUTSEL && resolved >= 0)
+            resolved = YamahaLmVoiceDump::outselWireValueMasked (resolved);
+
+        if (id == Id::EFLN1EL && resolved >= 0)
+            resolved = YamahaLmVoiceDump::eflnWireValueMasked (resolved);
 
         return resolved;
     }
@@ -2530,20 +2593,27 @@ namespace Sy99ParamRegistry
 
         const RawRefs refs = refsFor (s, m->id, el);
 
+        int wireValue = (int) b8;
+
+        if (m->id == Id::OUTSEL)
+            wireValue = YamahaLmVoiceDump::outselWireValueMasked (wireValue);
+        else if (m->id == Id::EFLN1EL)
+            wireValue = YamahaLmVoiceDump::eflnWireValueMasked (wireValue);
+
 #if JUCE_DEBUG
         if (m->id == Id::OUTSEL)
-            debugWriteOutselSlotImpl (refs.live, (int) b8, "ingestLiveParameterFrame", el, "parse", "live");
+            debugWriteOutselSlotImpl (refs.live, wireValue, "ingestLiveParameterFrame", el, "parse", "live");
         else if (m->id == Id::ELDT)
-            debugWriteEldtSlotImpl (refs.live, (int) b8, "ingestLiveParameterFrame", el, "parse");
+            debugWriteEldtSlotImpl (refs.live, wireValue, "ingestLiveParameterFrame", el, "parse");
         else if (m->id == Id::ELVL)
-            debugWriteElvlSlotImpl (refs.live, (int) b8, "ingestLiveParameterFrame", el, "parse", "live");
+            debugWriteElvlSlotImpl (refs.live, wireValue, "ingestLiveParameterFrame", el, "parse", "live");
         else if (m->id == Id::ELNS)
-            debugWriteElnsSlotImpl (refs.live, (int) b8, "ingestLiveParameterFrame", el, "parse", "live");
+            debugWriteElnsSlotImpl (refs.live, wireValue, "ingestLiveParameterFrame", el, "parse", "live");
         else if (isEfsendAuditId (m->id))
-            debugWriteEfsendSlotImpl (refs.live, m->id, (int) b8, "ingestLiveParameterFrame", el, "parse");
+            debugWriteEfsendSlotImpl (refs.live, m->id, wireValue, "ingestLiveParameterFrame", el, "parse");
         else
 #endif
-            writeSlot (refs.live, (int) b8);
+            writeSlot (refs.live, wireValue);
 
 #if JUCE_DEBUG
         if (m->id == Id::OUTSEL)
@@ -2723,15 +2793,22 @@ namespace Sy99ParamRegistry
         debugLogEfsendApplyBulkImpl (Id::EFSDSCL, 0, p.lmEfsdsclRaw);
         debugWriteEfsendSlotImpl (refsFor (s, Id::EFLN1EL, 0).bulk8101, Id::EFLN1EL,
                                   p.lmEfln1ElRaw, "applyBulk8101FromParsed", 0, "applyBulk");
-        debugWriteEfsendSlotImpl (refsFor (s, Id::EFSDLV, 0).bulk8101, Id::EFSDLV,
-                                  p.lmEfsdlvRaw, "applyBulk8101FromParsed", 0, "applyBulk");
+
+        if (YamahaLmVoiceDump::efsendBulk8101TrustedForElmodeRaw (s.lmElmodeRaw))
+            debugWriteEfsendSlotImpl (refsFor (s, Id::EFSDLV, 0).bulk8101, Id::EFSDLV,
+                                      p.lmEfsdlvRaw, "applyBulk8101FromParsed", 0, "applyBulk");
+
         debugWriteEfsendSlotImpl (refsFor (s, Id::EFSDVSNS, 0).bulk8101, Id::EFSDVSNS,
                                   p.lmEfsdvlRaw, "applyBulk8101FromParsed", 0, "applyBulk");
         debugWriteEfsendSlotImpl (refsFor (s, Id::EFSDSCL, 0).bulk8101, Id::EFSDSCL,
                                   p.lmEfsdsclRaw, "applyBulk8101FromParsed", 0, "applyBulk");
 #else
         writeSlot (refsFor (s, Id::EFLN1EL, 0).bulk8101, p.lmEfln1ElRaw);
-        writeSlot (refsFor (s, Id::EFSDLV, 0).bulk8101, p.lmEfsdlvRaw);
+
+        if (YamahaLmVoiceDump::efsendBulk8101TrustedForElmodeRaw (s.lmElmodeRaw))
+        {
+            writeSlot (refsFor (s, Id::EFSDLV, 0).bulk8101, p.lmEfsdlvRaw);
+        }
         writeSlot (refsFor (s, Id::EFSDVSNS, 0).bulk8101, p.lmEfsdvlRaw);
         writeSlot (refsFor (s, Id::EFSDSCL, 0).bulk8101, p.lmEfsdsclRaw);
 #endif
@@ -2773,8 +2850,15 @@ namespace Sy99ParamRegistry
         writeSlot (refsFor (s, Id::WLLML, 0).bulk0040, p.wllmlRaw);
         writeSlot (refsFor (s, Id::MCTUN, 0).bulk0040, p.mctunRaw);
         writeSlot (refsFor (s, Id::RNDP, 0).bulk0040, p.rndpRaw);
-        writeSlot (refsFor (s, Id::AFTMD, 0).bulk0040, p.aftmdRaw);
         writeSlot (refsFor (s, Id::SPTPNT, 0).bulk0040, p.sptpntRaw);
+
+        if (p.efsdlvE1Raw >= 0
+            && YamahaLmVoiceDump::efsendBulk0040E1TrustedForElmodeRaw (s.lmElmodeRaw))
+            writeSlot (refsFor (s, Id::EFSDLV, 0).bulk0040, p.efsdlvE1Raw);
+
+        if (p.efsdlvE2Raw >= 0
+            && YamahaLmVoiceDump::efsendBulk0040E2TrustedForElmodeRaw (s.lmElmodeRaw))
+            writeSlot (refsFor (s, Id::EFSDLV, 1).bulk0040, p.efsdlvE2Raw);
 
         if (p.efmodeRaw >= 0)
             s.efmodeRaw = -1;
@@ -4608,7 +4692,7 @@ namespace Sy99ParamRegistry
                     raw8101 = parsed8101Sysex;
 
                 const int parsed0040Sysex = Sy99LibraryBulkRead::readParsed0040ByRegistryId (
-                    id, parsed0040);
+                    id, elementIndex, parsed0040, parsed8101);
 
                 if (parsed0040Sysex >= 0)
                     raw0040 = parsed0040Sysex;

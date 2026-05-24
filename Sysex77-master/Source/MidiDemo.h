@@ -121,6 +121,8 @@ bool loadBankRequest = false;
 int timeOut = 0;
 static String bankSelected;
 
+#include "Sy99Lazy0040Fetch.h"
+
 static Value valueSysexIn; //values from sysex midi in
 static bool boolStopReceive; //to shunt the midi in when sending
 
@@ -155,6 +157,7 @@ static constexpr int kTabCommon = 3;
 #include "Config.h"
 #include "Voice.h"
 #include "Librairie.h"
+#include "Sy99LibrarySession.h"
 #include "MidiObjects.h"
 
 //==============================================================================
@@ -234,14 +237,7 @@ struct DemoTabbedComponent  : public TabbedComponent
                     cb();
         };
 
-        if (editorPatchDirty())
-        {
-            setCurrentTabIndex (prevTab);
-            tryLeaveEditorContext (proceed);
-            return;
-        }
-
-        executeEditorExitActionOnce (proceed);
+        proceed();
     }
     void popupMenuClickOnTab (int tabIndex, const String& tabName)override
     {
@@ -335,10 +331,20 @@ public:
         btShowRealtime.onClick = [this] { showRealtimeMidi = btShowRealtime.getToggleState(); };
 
         // "SysEx only" — default OFF: shows all messages; ON isolates parameter SysEx
-        addAndMakeVisible(btShowSysExOnly);
-        btShowSysExOnly.setClickingTogglesState(true);
-        btShowSysExOnly.setColour(TextButton::buttonOnColourId, Colours::darkorange);
-        btShowSysExOnly.onClick = [this] { showSysExOnly = btShowSysExOnly.getToggleState(); };
+        addAndMakeVisible (btShowSysExOnly);
+        btShowSysExOnly.setColour (ToggleButton::tickColourId, Colours::darkorange);
+        btShowSysExOnly.setColour (ToggleButton::tickDisabledColourId, Colours::darkorange);
+        btShowSysExOnly.onClick = [this]
+        {
+            showSysExOnly = btShowSysExOnly.getToggleState();
+            syncMonitorSysExOnlyButtonLook();
+            midiPersistSaveMonitorOptions (showSysExOnly);
+        };
+
+        incomingMidiLabel.setInterceptsMouseClicks (false, false);
+
+        midiPersistLoadMonitorOptions (showSysExOnly);
+        applyMonitorSysExOnlyToggleUi();
 
         addAndMakeVisible(btClearMonitor);
         btClearMonitor.onClick = [this] {
@@ -462,12 +468,39 @@ public:
             sendLibraryVoiceRecallToSynth (globalIdx);
         };
 
+        libraryPageBankSelectCallback() = [this] (Sy99LibraryContentPage page)
+        {
+            sendLibraryPageBankSelectToSynth (page);
+        };
+
         sy99DumpRequestSendCallback() = [this] (const juce::MidiMessage& msg)
         {
             if (sy99AnyLibrarySyncActive())
                 sendSysexHardware (msg);
             else
                 sendRaw (msg.getRawData(), (long) msg.getRawDataSize());
+        };
+
+        sy99BankClick0040ReapplyCallback() = []
+        {
+            const int targetMm = sy99BankClick0040FetchTargetMm();
+
+            if (targetMm >= 0 && bankSelectedVoiceIndex >= 0 && targetMm != bankSelectedVoiceIndex)
+            {
+                juce::Logger::writeToLog ("[BankClick] fetch0040 reapply skipped stale mm="
+                                          + juce::String::toHexString (targetMm).paddedLeft ('0', 2)
+                                          + " selected="
+                                          + juce::String::toHexString (bankSelectedVoiceIndex).paddedLeft ('0', 2));
+                return;
+            }
+
+            bankVoiceSlotApplyTrigger.setValue (++bankVoiceSlotApplyNonce);
+        };
+
+        librarySy99SessionSlotSelectCallback() = [] (int globalMm)
+        {
+            if (sy99LibrarySession().active)
+                selectLibrarySlotWithEditor (Sy99LibraryContentPage::internalVoices, globalMm);
         };
 
         Sy99MidiTransport::instance().setSender ([this] (const juce::MidiMessage& msg)
@@ -489,13 +522,13 @@ public:
                     outOpen = true;
 
             if (! inOpen && ! outOpen)
-                return "MIDI In и Out не открыты — вкладка Midi Setting, выберите порты SY99";
+                return Sy99Ui::midiInOutNotOpen();
 
             if (! outOpen)
-                return "MIDI Out не открыт — без него dump request не уйдёт на SY99";
+                return Sy99Ui::midiOutNotOpen();
 
             if (! inOpen)
-                return "MIDI In не открыт — ответ SY99 не будет принят";
+                return Sy99Ui::midiInNotOpen();
 
             return {};
         };
@@ -524,12 +557,22 @@ public:
             {
                 sendFeedbackCc (channel, cc, value, portMatch);
             });
+
+        juce::MessageManager::callAsync ([this]
+        {
+            updateDeviceList (true);
+            updateDeviceList (false);
+            restorePersistedMidiDevicesIfNeeded();
+        });
     }
     
     ~MidiDemo()
     {
         stopTimer();
         throttleTimer.stopTimer();
+
+        persistOpenMidiDevices();
+        midiPersistSaveMonitorOptions (showSysExOnly);
 
         midiInputs .clear();
         midiOutputs.clear();
@@ -667,15 +710,16 @@ public:
         pairButton.setBounds (margin, (getHeight() / 2) - (margin + 24),
                               getWidth() - (2 * margin), 24);
         
-        incomingMidiLabel.setBounds (margin, getHeight() / 2, getWidth() - (2 * margin), 24);
-        
-        midiMonitor.setBounds (margin, (getHeight()/2 + (24 + margin)), getWidth() - (2 * margin), getHeight()/2 - 128);
-        // Filter buttons left of btBulk; btBulk stays at its original position
-        btShowRealtime .setBounds (margin,                getHeight() / 2, getWidth() / 5, 24);
-        btShowSysExOnly.setBounds (margin + getWidth()/5, getHeight() / 2, getWidth() / 5, 24);
-        btBulk         .setBounds (getWidth() / 2,        getHeight() / 2, getWidth() / 4, 24);
+        const int filterRowY = getHeight() / 2;
+        incomingMidiLabel.setBounds (margin, filterRowY - 26, getWidth() - (2 * margin), 22);
+
+        midiMonitor.setBounds (margin, (filterRowY + 24 + margin), getWidth() - (2 * margin), getHeight()/2 - 128);
+        // Filter buttons left of btBulk; label sits on the row above (no overlap)
+        btShowRealtime .setBounds (margin,                filterRowY, getWidth() / 5, 24);
+        btShowSysExOnly.setBounds (margin + getWidth()/5, filterRowY, getWidth() / 5, 24);
+        btBulk         .setBounds (getWidth() / 2,        filterRowY, getWidth() / 4, 24);
         {
-            const int yBtn = getHeight() / 2;
+            const int yBtn = filterRowY;
             const int rightQuarterX = (getWidth() * 3) / 4;
             const int rightQuarterW = getWidth() / 4 - margin;
             constexpr int gap = 4;
@@ -698,7 +742,12 @@ public:
     {
         if (isInput)
         {
-            jassert (midiInputs[index]->inDevice.get() == nullptr);
+            if (index < 0 || index >= midiInputs.size())
+                return;
+
+            if (midiInputs[index]->inDevice.get() != nullptr)
+                return;
+
             midiInputs[index]->inDevice = MidiInput::openDevice (midiInputs[index]->identifier, this);
             
             if (midiInputs[index]->inDevice.get() == nullptr)
@@ -711,7 +760,12 @@ public:
         }
         else
         {
-            jassert (midiOutputs[index]->outDevice.get() == nullptr);
+            if (index < 0 || index >= midiOutputs.size())
+                return;
+
+            if (midiOutputs[index]->outDevice.get() != nullptr)
+                return;
+
             midiOutputs[index]->outDevice = MidiOutput::openDevice (midiOutputs[index]->identifier);
             
             if (midiOutputs[index]->outDevice.get() == nullptr)
@@ -720,6 +774,9 @@ public:
             }
         }
 
+        if (! isInput)
+            flushPendingLibraryRecall();
+
         tryStartupEditBufferSyncFromMidiConnect();
     }
     
@@ -727,13 +784,23 @@ public:
     {
         if (isInput)
         {
-            jassert (midiInputs[index]->inDevice.get() != nullptr);
+            if (index < 0 || index >= midiInputs.size())
+                return;
+
+            if (midiInputs[index]->inDevice.get() == nullptr)
+                return;
+
             midiInputs[index]->inDevice->stop();
             midiInputs[index]->inDevice.reset();
         }
         else
         {
-            jassert (midiOutputs[index]->outDevice.get() != nullptr);
+            if (index < 0 || index >= midiOutputs.size())
+                return;
+
+            if (midiOutputs[index]->outDevice.get() == nullptr)
+                return;
+
             midiOutputs[index]->outDevice.reset();
         }
     }
@@ -826,6 +893,7 @@ private:
                 }
                 
                 lastSelectedItems = newSelectedItems;
+                parent.persistOpenMidiDevices();
             }
         }
         
@@ -877,8 +945,15 @@ private:
 
             if (n == 9 && d[0] == 0x43 && d[2] == 0x34)
             {
-                gLiveSynthState.ingestParameterFrame (d[3], d[4], d[5], d[6], d[7], d[8]);
-                Sy99HardwareMappingRuntime::onLiveParameterSysex (d[3], d[4], d[5], d[6], d[8]);
+                // Dump stream param9 for EFSDLV is unreliable (often 0 or stale 8101 tail e.g. 106).
+                const bool skipEfsendlvlDuringDump = gRequestLiveVoiceRead
+                    && YamahaLmVoiceDump::isEfsendlvlLiveParam9Frame (d[3], d[4], d[5], d[6]);
+
+                if (! skipEfsendlvlDuringDump)
+                {
+                    gLiveSynthState.ingestParameterFrame (d[3], d[4], d[5], d[6], d[7], d[8]);
+                    Sy99HardwareMappingRuntime::onLiveParameterSysex (d[3], d[4], d[5], d[6], d[8]);
+                }
             }
             else
                 gLiveSynthState.noteNonParameterMessage (n);
@@ -1111,29 +1186,80 @@ public:
         }
 
         const int bankMsb = globalIdx / 16;
-        const int bankLsb = 0;
-        const int program = globalIdx % 16;
+        const int bankLsb = sy99BankLsbForLibraryContentPage (libraryContentPage());
+        const int program = sy99OutboundProgramForLibrarySlot (libraryContentPage(), globalIdx);
 
         auto& echo = libraryVoiceProgramChangeEchoGuard();
         echo.lastGlobalIdx = globalIdx;
+        echo.lastBankMsb = bankMsb;
+        echo.lastBankLsb = bankLsb;
+        echo.lastPage = libraryContentPage();
         echo.sentAtMs = juce::Time::getMillisecondCounter();
 
-        sendToOutputs (MidiMessage::controllerEvent (midiCh, 0, bankMsb));
+        sendToOutputs (MidiMessage::controllerEvent (midiCh, 0, 0));
         sendToOutputs (MidiMessage::controllerEvent (midiCh, 32, bankLsb));
 
         MidiMessage pc = MidiMessage::programChange (midiCh, program);
         pc.setTimeStamp (Time::getMillisecondCounterHiRes() * 0.001);
         sendToOutputs (pc);
 
-        Logger::writeToLog ("[VOICE-TAB-RECALL] CC0=" + String (bankMsb)
-                            + " CC32=" + String (bankLsb)
-                            + " PC=" + String (program)
-                            + " source=Common->Voice currentEditIdx=" + String (globalIdx)
-                            + " label=\"" + libraryVoiceSlotLabel (globalIdx) + "\"");
+        juce::String txLog = "[VOICE-TAB-RECALL] CC32=" + String (bankLsb)
+                             + " CC0=0 PC=" + String (program)
+                  + " source=Common->Voice currentEditIdx=" + String (globalIdx)
+                  + " label=\"" + libraryVoiceSlotLabel (globalIdx) + "\"";
+        Logger::writeToLog (txLog);
     }
 
-    /** [LIBSYNC] Recall SY99 voice (outbound). Full triple when page, CC32, or mm/16 changed.
-        In-context: PC only when libraryRecallContext matches (page + bankLsb + bankMsb). */
+    void sendLibraryPageBankSelectToSynth (Sy99LibraryContentPage page)
+    {
+        constexpr int midiCh = 1;
+
+        if (! hasMidiOutputOpen())
+        {
+            Logger::writeToLog ("[LIBSYNC] Page bank select skipped (MIDI Out not open) page="
+                                + String ((int) page));
+            return;
+        }
+
+        const int bankLsb = sy99BankLsbForLibraryContentPage (page);
+        bool sentOk = sendToOutputs (MidiMessage::controllerEvent (midiCh, 0, 0));
+
+        if (sentOk)
+            sentOk = sendToOutputs (MidiMessage::controllerEvent (midiCh, 32, bankLsb));
+
+        if (sentOk)
+            libraryRecallContextAfterPageBankSelect (page);
+
+        libraryNavAuditLog ("TX page-select", page, 0, bankLsb, -1, -1, -1, true, false);
+
+        Logger::writeToLog ("[LIBSYNC] Page bank select ch" + String (midiCh)
+                            + " CC0=0 CC32=" + String (bankLsb)
+                            + " page=" + String ((int) page)
+                            + (sentOk ? "" : " (TX failed)"));
+    }
+
+    bool hasMidiOutputOpen() const noexcept
+    {
+        for (auto& entry : midiOutputs)
+            if (entry->outDevice.get() != nullptr)
+                return true;
+
+        return false;
+    }
+
+    void flushPendingLibraryRecall()
+    {
+        if (! pendingLibraryRecallValid || pendingLibraryRecallIdx < 0)
+            return;
+
+        const int mm = pendingLibraryRecallIdx;
+        pendingLibraryRecallValid = false;
+        pendingLibraryRecallIdx = -1;
+        sendLibraryVoiceRecallToSynth (mm);
+    }
+
+    /** [LIBSYNC] Recall SY99 voice (outbound). Strong CC0+CC32+PC when not in sync;
+        PC-only when sy99HostSynthNavInSync. Context committed only after successful TX. */
     void sendLibraryVoiceRecallToSynth (int globalIdx)
     {
         constexpr int midiCh = 1;
@@ -1146,13 +1272,28 @@ public:
         {
             Logger::writeToLog ("[LIBSYNC] Recall skipped: globalIdx " + String (globalIdx)
                                 + " out of range 0…" + String (maxIdx));
+            pendingLibraryRecallValid = false;
             return;
         }
 
-        const int bankMsb = isMulti ? 0 : (globalIdx / 16);
+        if (! hasMidiOutputOpen())
+        {
+            pendingLibraryRecallIdx = globalIdx;
+            pendingLibraryRecallValid = true;
+            Logger::writeToLog ("[LIBSYNC] Recall deferred (MIDI Out not open) mm="
+                                + String (globalIdx)
+                                + " page=" + String ((int) page));
+            return;
+        }
+
+        pendingLibraryRecallValid = false;
+
+        const int bankMsb = globalIdx / 16;
         const int bankLsb = sy99BankLsbForLibraryContentPage (page);
         const int program = sy99OutboundProgramForLibrarySlot (page, globalIdx);
         const bool fullTriple = libraryOutboundNeedsFullTriple (page, globalIdx);
+        const bool sendCc0 = sy99OutboundNeedsCc0ForRecall (page, globalIdx, fullTriple);
+        const int cc0Value = fullTriple ? 0 : bankMsb;
 
         auto& echo = libraryVoiceProgramChangeEchoGuard();
         echo.lastGlobalIdx = globalIdx;
@@ -1161,35 +1302,53 @@ public:
         echo.lastPage = page;
         echo.sentAtMs = juce::Time::getMillisecondCounter();
 
-        if (fullTriple)
-        {
-            sendToOutputs (MidiMessage::controllerEvent (midiCh, 0, bankMsb));
-            sendToOutputs (MidiMessage::controllerEvent (midiCh, 32, bankLsb));
-        }
-
-        MidiMessage pc = MidiMessage::programChange (midiCh, program);
-        pc.setTimeStamp (Time::getMillisecondCounterHiRes() * 0.001);
-        sendToOutputs (pc);
-
-        libraryRecallContextAfterSend (page, globalIdx);
-
-        libraryNavAuditLog ("TX", page, bankMsb, bankLsb, program, -1, globalIdx, fullTriple, false);
+        bool sentOk = true;
 
         if (fullTriple)
         {
-            Logger::writeToLog ("[LIBSYNC] Recall external ch" + String (midiCh)
-                                + ": CC0=" + String (bankMsb)
-                                + " CC32=" + String (bankLsb)
-                                + " PC=" + String (program)
-                                + " (globalIdx=" + String (globalIdx) + ")");
+            if (sendCc0)
+                if (! sendToOutputs (MidiMessage::controllerEvent (midiCh, 0, cc0Value)))
+                    sentOk = false;
+
+            if (sentOk)
+                if (! sendToOutputs (MidiMessage::controllerEvent (midiCh, 32, bankLsb)))
+                    sentOk = false;
         }
+        else if (sendCc0)
+        {
+            if (! sendToOutputs (MidiMessage::controllerEvent (midiCh, 0, cc0Value)))
+                sentOk = false;
+        }
+
+        if (sentOk)
+        {
+            MidiMessage pc = MidiMessage::programChange (midiCh, program);
+            pc.setTimeStamp (Time::getMillisecondCounterHiRes() * 0.001);
+
+            if (! sendToOutputs (pc))
+                sentOk = false;
+        }
+
+        if (sentOk)
+            libraryRecallContextAfterSend (page, globalIdx);
         else
-        {
-            Logger::writeToLog ("[LIBSYNC] Recall in-context ch" + String (midiCh)
-                                + ": PC=" + String (program)
-                                + " (bank MSB=" + String (bankMsb)
-                                + " globalIdx=" + String (globalIdx) + ")");
-        }
+            Logger::writeToLog ("[LIBSYNC] Recall TX failed — context not committed mm="
+                                + String (globalIdx));
+
+        libraryNavAuditLog ("TX", page, sendCc0 ? cc0Value : -1, fullTriple ? bankLsb : -1,
+                            program, -1, globalIdx, fullTriple, false);
+
+        juce::String txLog = "[LIBSYNC] Recall ch" + String (midiCh);
+
+        if (fullTriple)
+            txLog += " CC32=" + String (bankLsb);
+
+        if (sendCc0)
+            txLog += " CC0=" + String (cc0Value);
+
+        txLog += " PC=" + String (program) + " (globalIdx=" + String (globalIdx) + ")"
+                 + " fullTriple=" + String (fullTriple ? 1 : 0);
+        Logger::writeToLog (txLog);
     }
 
     void appendToMidiMonitor (const MidiMessage& message, const char* directionTag)
@@ -1277,12 +1436,12 @@ public:
         }
     }
 
-    void sendToOutputs (const MidiMessage& msg)
+    bool sendToOutputs (const MidiMessage& msg)
     {
         if (msg.isSysEx())
         {
             sendSysexHardware (msg);
-            return;
+            return true;
         }
 
         boolStopReceive = true;
@@ -1312,6 +1471,7 @@ public:
         }
 
         boolStopReceive = false;
+        return sentAny;
     }
 
     // THROTTLE DEBOUNCE: called by ThrottleFlushTimer when the throttle window
@@ -1481,6 +1641,107 @@ public:
                 midiSelector->syncSelectedItemsWithDeviceList (midiDevices);
         }
     }
+
+    static int findMidiDeviceRowForPersistedId (const ReferenceCountedArray<MidiDeviceListEntry>& devices,
+                                                const juce::String& persistedId) noexcept
+    {
+        if (persistedId.isEmpty())
+            return -1;
+
+        for (int i = 0; i < devices.size(); ++i)
+        {
+            if (devices[i]->identifier == persistedId)
+                return i;
+        }
+
+        for (int i = 0; i < devices.size(); ++i)
+        {
+            if (devices[i]->name == persistedId)
+                return i;
+        }
+
+        return -1;
+    }
+
+    void restorePersistedMidiDevicesIfNeeded()
+    {
+        if (midiDevicesRestoredOnce)
+            return;
+
+        juce::StringArray savedInputIds, savedOutputIds;
+        midiPersistLoadOpenDeviceIds (savedInputIds, savedOutputIds);
+
+        if (savedInputIds.isEmpty() && savedOutputIds.isEmpty())
+        {
+            midiDevicesRestoredOnce = true;
+            return;
+        }
+
+        if (midiInputSelector != nullptr && ! savedInputIds.isEmpty())
+        {
+            juce::SparseSet<int> rows;
+
+            for (const auto& id : savedInputIds)
+            {
+                const int row = findMidiDeviceRowForPersistedId (midiInputs, id);
+
+                if (row >= 0 && midiInputs[row]->inDevice.get() == nullptr)
+                    rows.addRange (juce::Range<int> (row, row + 1));
+            }
+
+            if (! rows.isEmpty())
+                midiInputSelector->setSelectedRows (rows, juce::sendNotification);
+        }
+
+        if (midiOutputSelector != nullptr && ! savedOutputIds.isEmpty())
+        {
+            juce::SparseSet<int> rows;
+
+            for (const auto& id : savedOutputIds)
+            {
+                const int row = findMidiDeviceRowForPersistedId (midiOutputs, id);
+
+                if (row >= 0 && midiOutputs[row]->outDevice.get() == nullptr)
+                    rows.addRange (juce::Range<int> (row, row + 1));
+            }
+
+            if (! rows.isEmpty())
+                midiOutputSelector->setSelectedRows (rows, juce::sendNotification);
+        }
+
+        midiDevicesRestoredOnce = true;
+        juce::Logger::writeToLog ("[MidiPersist] restored in="
+                                    + juce::String (savedInputIds.size())
+                                    + " out=" + juce::String (savedOutputIds.size()));
+
+        juce::MessageManager::callAsync ([this]
+        {
+            flushPendingLibraryRecall();
+        });
+    }
+
+    void persistOpenMidiDevices() noexcept
+    {
+        juce::StringArray inputIds, outputIds;
+
+        for (auto& entry : midiInputs)
+        {
+            if (entry->inDevice.get() == nullptr)
+                continue;
+
+            inputIds.add (entry->identifier.isNotEmpty() ? entry->identifier : entry->name);
+        }
+
+        for (auto& entry : midiOutputs)
+        {
+            if (entry->outDevice.get() == nullptr)
+                continue;
+
+            outputIds.add (entry->identifier.isNotEmpty() ? entry->identifier : entry->name);
+        }
+
+        midiPersistSaveOpenDevices (inputIds, outputIds);
+    }
     
     //==============================================================================
     void addLabelAndSetStyle (Label& label)
@@ -1492,6 +1753,19 @@ public:
         label.setColour (TextEditor::backgroundColourId, Colour (0x00000000));
         
         addAndMakeVisible (label);
+    }
+
+    void syncMonitorSysExOnlyButtonLook() noexcept
+    {
+        btShowSysExOnly.setColour (ToggleButton::textColourId,
+                                   showSysExOnly ? Colours::darkorange : Colours::white);
+    }
+
+    void applyMonitorSysExOnlyToggleUi() noexcept
+    {
+        btShowSysExOnly.setToggleState (showSysExOnly, juce::dontSendNotification);
+        syncMonitorSysExOnlyButtonLook();
+        btShowSysExOnly.repaint();
     }
     
     void comboBoxChanged	(	ComboBox * 	comboBoxThatHasChanged	) override
@@ -1583,8 +1857,8 @@ public:
     int  sysExMsgCounter     = 0;
     int  midiMonitorCharCount = 0;  // tracks accumulated chars; reset on clear/auto-trim
 
-    TextButton btShowRealtime  { "Show realtime" };
-    TextButton btShowSysExOnly { "SysEx only" };
+    TextButton   btShowRealtime  { "Show realtime" };
+    ToggleButton btShowSysExOnly { "SysEx only" };
     TextButton btCopyMonitor   { "Copy" };
     TextButton btClearMonitor  { "Clear" };
 
@@ -1614,6 +1888,10 @@ public:
     static constexpr int kEchoGuardSize = 16;
     EchoEntry echoGuard[kEchoGuardSize] {};
     int echoGuardIndex = 0;
+
+    bool midiDevicesRestoredOnce = false;
+    bool pendingLibraryRecallValid = false;
+    int pendingLibraryRecallIdx = -1;
 
     //==============================================================================
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MidiDemo)

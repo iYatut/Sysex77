@@ -49,8 +49,10 @@ inline constexpr int kSy99LibraryVoiceSlotCount = 64;
 /** Multi: 16 performances M1…M16 — one list (not voice-style banks A–D). */
 inline constexpr int kSy99LibraryMultiSlotCount = 16;
 
-/** Multi MIDI (HW 2026-05-23): CC32=18, CC0=0, PC 64…79 = M1…M16 (linear, no CC0 groups). */
+/** Multi MIDI: CC32=16 internal / 18 preset, CC0=0, PC 64…79 = M1…M16. */
 inline constexpr int kSy99MultiPcBase = 64;
+inline constexpr int kSy99Cc32MultiInternal = 16;
+inline constexpr int kSy99Cc32MultiPreset   = 18;
 
 inline int libraryPageRowsPerBank() noexcept
 {
@@ -229,6 +231,21 @@ inline void selectLibraryPageSlotExclusive (int bankIndex, int rowInBank) noexce
         highlight (globalIdx);
 }
 
+inline uint8 sy99VoiceBulkMemoryTypeForContentPage (Sy99LibraryContentPage page) noexcept
+{
+    switch (page)
+    {
+        case Sy99LibraryContentPage::preset1Voices: return 0x02;
+        case Sy99LibraryContentPage::preset2Voices: return 0x03;
+        default:                                    return 0x00;
+    }
+}
+
+inline uint8 sy99VoiceBulkMemoryTypeForLibraryPage() noexcept
+{
+    return sy99VoiceBulkMemoryTypeForContentPage (libraryContentPage());
+}
+
 /** UI feedback when a library slot is opened in the editor (no MIDI out). */
 inline std::function<void (int globalIdx, const juce::String& voiceName)>& libraryVoiceOpenedCallback() noexcept
 {
@@ -273,7 +290,12 @@ inline bool sy99LibraryContentPageFromBankLsb (int bankLsb,
         case 0:  pageOut = Sy99LibraryContentPage::internalVoices; return true;
         case 2:  pageOut = Sy99LibraryContentPage::preset1Voices; return true;
         case 5:  pageOut = Sy99LibraryContentPage::preset2Voices; return true;
-        case 18: pageOut = Sy99LibraryContentPage::multiInternal; return true;
+        case kSy99Cc32MultiInternal:
+            pageOut = Sy99LibraryContentPage::multiInternal;
+            return true;
+        case kSy99Cc32MultiPreset:
+            pageOut = Sy99LibraryContentPage::multiPreset;
+            return true;
         default: return false;
     }
 }
@@ -284,8 +306,8 @@ inline int sy99BankLsbForLibraryContentPage (Sy99LibraryContentPage page) noexce
     {
         case Sy99LibraryContentPage::preset1Voices: return 2;
         case Sy99LibraryContentPage::preset2Voices: return 5;
-        case Sy99LibraryContentPage::multiInternal:
-        case Sy99LibraryContentPage::multiPreset:   return 18;
+        case Sy99LibraryContentPage::multiInternal: return kSy99Cc32MultiInternal;
+        case Sy99LibraryContentPage::multiPreset:   return kSy99Cc32MultiPreset;
         default: return 0;
     }
 }
@@ -327,7 +349,11 @@ inline int sy99OutboundProgramForLibrarySlot (Sy99LibraryContentPage page, int g
     if (libraryPageIsMulti (page))
         return juce::jlimit (0, 127, kSy99MultiPcBase + globalMm);
 
-    return globalMm % 16;
+    // B..D: PC 16..63 is direct voice index. A: PC 0..15 is slot (pair with CC0=0).
+    if (globalMm >= 16)
+        return globalMm;
+
+    return juce::jlimit (0, 15, globalMm);
 }
 
 /** Client edit context: bankSelectedVoiceIndex when a bank is loaded and index is in range. */
@@ -372,6 +398,20 @@ inline std::function<void (int globalIdx)>& libraryVoiceProgramChangeCallback() 
     return cb;
 }
 
+/** Tab switch: CC0=0 + CC32 without PC (MidiDemo::sendLibraryPageBankSelectToSynth). */
+inline std::function<void (Sy99LibraryContentPage page)>& libraryPageBankSelectCallback() noexcept
+{
+    static std::function<void (Sy99LibraryContentPage)> cb;
+    return cb;
+}
+
+/** Startup / persist restore: Librairie tab UI + bank select (switchLibraryContentPage). */
+inline std::function<void (Sy99LibraryContentPage page)>& libraryContentPageRestoreCallback() noexcept
+{
+    static std::function<void (Sy99LibraryContentPage)> cb;
+    return cb;
+}
+
 /** Common tab → Voice tab: full CC0+CC32+PC recall for current editor voice (MidiDemo::sendVoiceTabRecallFromCommonEdit). */
 inline std::function<void()>& voiceTabRecallFromCommonCallback() noexcept
 {
@@ -385,6 +425,27 @@ inline bool& libraryVoiceSuppressProgramChangeSend() noexcept
     static bool suppress = false;
     return suppress;
 }
+
+/** Skip auto slot open after bank reload (sync finish). */
+inline bool& libraryVoiceSuppressAutoSlotOpen() noexcept
+{
+    static bool suppress = false;
+    return suppress;
+}
+
+/** Delegate SY-99 bank clicks to session path when wired (MidiDemo). */
+inline std::function<void (int globalMm)>& librarySy99SessionSlotSelectCallback() noexcept
+{
+    static std::function<void (int)> cb;
+    return cb;
+}
+
+inline void sy99OpenVoiceSlotFromCapture (Sy99LibraryContentPage page,
+                                          int mm,
+                                          const juce::File& capture,
+                                          const juce::Array<int>& offsets,
+                                          const juce::Array<int>& lengths,
+                                          const juce::StringArray* manifestNames = nullptr) noexcept;
 
 /** Ignore inbound PC echo right after we sent recall (CC0+CC32+PC). */
 struct LibraryVoiceProgramChangeEchoGuard
@@ -453,10 +514,24 @@ inline std::function<void()>& syncCommonMixerLayoutCallback() noexcept
     return cb;
 }
 
+inline void editorDirtyAuditLog (const char* event, const char* reason = "") noexcept
+{
+    juce::String msg = "[EditorDirty] " + juce::String (event);
+
+    if (reason != nullptr && reason[0] != '\0')
+        msg << " reason=" << reason;
+
+    msg << " dirty=" << (int) editorPatchDirty();
+    juce::Logger::writeToLog (msg);
+}
+
 inline void markEditorPatchDirty() noexcept
 {
-    if (! suppressEditorPatchDirtyMark())
-        editorPatchDirty() = true;
+    if (suppressEditorPatchDirtyMark())
+        return;
+
+    editorPatchDirty() = true;
+    editorDirtyAuditLog ("mark", "user-edit");
 }
 
 /** Pre-fill slots during library sync so banks show live progress. */
@@ -512,7 +587,11 @@ inline String libraryVoiceListCellText (int globalIdx) noexcept
 
 inline void clearEditorPatchDirty() noexcept
 {
+    if (! editorPatchDirty())
+        return;
+
     editorPatchDirty() = false;
+    editorDirtyAuditLog ("clear");
 }
 
 /** Wired from MidiDemo to VoicePage::commitEditorSessionToLiveSynthBaseline(). */
@@ -552,14 +631,53 @@ inline void runPendingEditorExitActionOnce() noexcept
     executeEditorExitActionOnce (action);
 }
 
-inline bool tryLeaveEditorContext (std::function<void()> onProceed)
+inline void scheduleEditorSlotApplyGraceClear() noexcept
+{
+    editorSyncBaselineGracePeriod() = true;
+
+    juce::MessageManager::callAsync ([]
+    {
+        suppressEditorPatchDirtyMark() = true;
+        clearEditorPatchDirty();
+        suppressEditorPatchDirtyMark() = false;
+        editorSyncBaselineGracePeriod() = false;
+    });
+}
+
+inline bool shouldPromptEditorExitGate (int targetGlobalMm = -1) noexcept
+{
+    if (suppressEditorExitPrompt() || editorSyncBaselineGracePeriod())
+        return false;
+
+    if (! editorPatchDirty())
+        return false;
+
+    const int current = resolveCurrentEditorVoiceGlobalIdx();
+
+    if (current < 0)
+    {
+        editorDirtyAuditLog ("gate-skip", "no-open-patch");
+        return false;
+    }
+
+    if (targetGlobalMm >= 0 && targetGlobalMm == current)
+    {
+        editorDirtyAuditLog ("gate-skip", "same-slot");
+        return false;
+    }
+
+    return true;
+}
+
+inline bool tryLeaveEditorContext (std::function<void()> onProceed, int targetGlobalMm = -1)
 {
     if (! onProceed)
         return true;
 
-    if (! editorPatchDirty() || suppressEditorExitPrompt() || editorSyncBaselineGracePeriod())
+    if (! shouldPromptEditorExitGate (targetGlobalMm))
         return executeEditorExitActionOnce (onProceed);
 
+    editorDirtyAuditLog ("gate", "unsaved-patch-or-quit");
     juce::Logger::writeToLog ("[Editor exit gate] dirty=1 — Save re-reads UI into baseline; Apply/Cancel discard navigation or skip baseline");
 
     pendingEditorExitAction() = std::move (onProceed);
@@ -601,6 +719,16 @@ inline bool tryLeaveEditorContext (std::function<void()> onProceed)
 static inline void selectLibraryVoiceSlotProceed (int slotInBank, int bankOffset)
 {
     const int globalIdx = bankOffset + slotInBank;
+
+    if (bankSelected.equalsIgnoreCase ("SY-99"))
+    {
+        if (auto& sessionSelect = librarySy99SessionSlotSelectCallback(); sessionSelect != nullptr)
+        {
+            sessionSelect (globalIdx);
+            return;
+        }
+    }
+
     bankSelectedVoiceIndex = globalIdx;
     clearEditorPatchDirty();
 
@@ -614,38 +742,11 @@ static inline void selectLibraryVoiceSlotProceed (int slotInBank, int bankOffset
             bankFile = libraryCapturesDirPath().getChildFile ("AUTOSYNC-VOICE64.syx");
     }
 
-    const bool parsed = ingestLm8101FromBankVoiceSlotAndLog (globalIdx, bankFile,
-                                                             voiceSysexFileOffsets, voiceSysexFileLengths);
-
-    if (parsed)
-        getLiveSynthState().clearLiveParam9Overrides();
-
-    String notifyName;
-
-    if (parsed && getLiveSynthState().lmVoiceName[0] != '\0')
-        notifyName = String (getLiveSynthState().lmVoiceName).trimEnd();
-    else
-        notifyName = libraryVoiceSlotLabel (globalIdx);
-
-    if (parsed || notifyName.isNotEmpty())
-    {
-        bankSelectedVoiceName = notifyName;
-        bankSelectedVoiceNameValue.setValue (juce::var (bankSelectedVoiceName));
-    }
-
-    bankVoiceSlotApplyTrigger.setValue (++bankVoiceSlotApplyNonce);
-
-    if (auto& highlight = libraryVoiceHighlightCallback(); highlight != nullptr)
-        highlight (globalIdx);
-
-    if (auto& opened = libraryVoiceOpenedCallback(); opened != nullptr)
-        opened (globalIdx, notifyName);
-
-    if (! libraryVoiceSuppressProgramChangeSend())
-    {
-        if (auto& programChange = libraryVoiceProgramChangeCallback(); programChange != nullptr)
-            programChange (globalIdx);
-    }
+    sy99OpenVoiceSlotFromCapture (Sy99LibraryContentPage::internalVoices,
+                                  globalIdx,
+                                  bankFile,
+                                  voiceSysexFileOffsets,
+                                  voiceSysexFileLengths);
 }
 
 static inline void selectLibraryVoiceSlot (int slotInBank, int bankOffset)
@@ -659,7 +760,8 @@ static inline void selectLibraryVoiceSlot (int slotInBank, int bankOffset)
     tryLeaveEditorContext ([=]
     {
         selectLibraryVoiceSlotProceed (slotInBank, bankOffset);
-    });
+    },
+                           bankOffset + slotInBank);
 }
 
 /** UI thread: Librairie tab + slot after inbound PC (mm already committed on MIDI thread). */
@@ -703,16 +805,12 @@ inline bool libraryInboundPcIsEcho (Sy99LibraryContentPage page, int mm, int pc)
     if (page == echo.lastPage && mm == echo.lastGlobalIdx)
         return true;
 
-    if (! libraryPageIsMulti (page) && page == echo.lastPage)
-    {
-        const int bankMsb = mm / 16;
-        const int slot = mm % 16;
+    if (libraryPageIsMulti (page) && page == echo.lastPage
+        && pc == kSy99MultiPcBase + echo.lastGlobalIdx)
+        return true;
 
-        if (bankMsb == echo.lastBankMsb
-            && slot == (pc % 16)
-            && sy99BankLsbForLibraryContentPage (page) == echo.lastBankLsb)
-            return true;
-    }
+    if (! libraryPageIsMulti (page) && page == echo.lastPage && pc == echo.lastGlobalIdx)
+        return true;
 
     return false;
 }
@@ -729,7 +827,7 @@ inline void processInboundLibraryProgramChangeOnMidiThread (int pc, int midiChan
 
     int cc32 = inboundLibraryBankLsb();
 
-    if (batch.cc32 >= 0 && nowMs - batch.lastAtMs <= LibraryInboundNavCcBatch::kWindowMs)
+    if (batch.cc32 >= 0)
         cc32 = batch.cc32;
 
     Sy99LibraryContentPage page = Sy99LibraryContentPage::internalVoices;
@@ -742,12 +840,13 @@ inline void processInboundLibraryProgramChangeOnMidiThread (int pc, int midiChan
         page = Sy99LibraryContentPage::internalVoices;
     }
 
-    const int cc0Batch = batch.cc0Fresh (nowMs) ? batch.cc0 : -1;
+    const int cc0Batch = batch.cc0;
     const int prevMm = committed.mm;
     const int mm = sy99InboundVoiceMmFromPc (page, pc, cc0Batch, committed);
 
     committed.page = page;
     committed.mm = mm;
+    libraryRecallContextAfterSend (page, mm);
 
     if (libraryPageIsMulti (page))
     {
@@ -766,6 +865,7 @@ inline void processInboundLibraryProgramChangeOnMidiThread (int pc, int midiChan
 
     inboundLibraryBankLsb() = cc32;
     batch.cc0 = -1;
+    batch.cc32 = -1;
 
     libraryNavAuditLog ("RX", page, cc0Batch, cc32, pc, prevMm, mm, false, false);
 
@@ -804,7 +904,8 @@ static inline void stepLibraryVoiceSlot (int delta) noexcept
             tryLeaveEditorContext ([=]
             {
                 slotOpen (libraryContentPage(), idx);
-            });
+            },
+                                   idx);
             return;
         }
     }
@@ -815,7 +916,8 @@ static inline void stepLibraryVoiceSlot (int delta) noexcept
     tryLeaveEditorContext ([=]
     {
         selectLibraryVoiceSlotProceed (slotInBank, bankOffset);
-    });
+    },
+                           idx);
 }
 
 /** Human label for where a 05:64 bulk frame lands on SY99 internal memory. */
@@ -1472,4 +1574,3 @@ public:    void loadBank()
 };
 
 //==============================================================================
-    //==============================================================================

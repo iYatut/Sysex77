@@ -69,6 +69,15 @@ inline void sy99LibrarySyncSendAuto64Request() noexcept
     sy99Sym7MarkTx (s.pacing);
 }
 
+inline void sy99LibrarySyncSendAuto640040Request() noexcept
+{
+    auto& s = sy99AutoSync64Session();
+    sendSym7VcRequest (DeviceModel::getInstance().getSysExDeviceID(),
+                       uint8 (s.currentMm),
+                       s.byte28);
+    sy99Sym7MarkTx (s.pacing);
+}
+
 inline void sy99LibrarySyncSendFullRequest() noexcept
 {
     auto& s = sy99FullLibrarySyncSession();
@@ -222,7 +231,12 @@ private:
             }
 
             sy99Sym7ClearPendingSend (sy99AutoSync64Session().pacing);
-            sy99LibrarySyncSendAuto64Request();
+
+            if (sy99AutoSync64Session().subStep == Sy99AutoSync64SubStep::wait0040)
+                sy99LibrarySyncSendAuto640040Request();
+            else
+                sy99LibrarySyncSendAuto64Request();
+
             return;
         }
 
@@ -241,6 +255,35 @@ private:
         }
     }
 
+    void finishAuto64CaptureOnUi (const juce::File& saved) noexcept
+    {
+        endSyncCapture();
+
+        juce::MessageManager::callAsync ([saved]()
+        {
+            if (auto& host = sy99LibrarySyncHost(); host.finishAuto64OnUi != nullptr)
+                host.finishAuto64OnUi (saved);
+        });
+    }
+
+    void advanceAuto64AfterSlotPair (Sy99AutoSync64Session& s) noexcept
+    {
+        if (s.currentMm >= kSy99AutoSyncInternalVoiceCount - 1)
+        {
+            const File saved = saveAutoSync64CombinedCapture (s.accumulator);
+            finishAuto64CaptureOnUi (saved);
+            return;
+        }
+
+        ++s.currentMm;
+        s.subStep = Sy99AutoSync64SubStep::wait8101;
+        s.retry0040Pending = false;
+        sy99Sym7ScheduleGapFromLastTx (s.pacing, kSym7VcInterRequestDelayMs);
+        sy99LibrarySyncLogTiming (s.pacing,
+                                  sy99AutoSync64SlotLabel (s.currentMm - 1) + " -> "
+                                      + sy99AutoSync64SlotLabel (s.currentMm));
+    }
+
     void processAuto64Slot (const juce::Array<juce::MidiMessage>& batch, bool receivedOk) noexcept
     {
         auto& s = sy99AutoSync64Session();
@@ -257,50 +300,93 @@ private:
 
         RxSlotGuard guard (s.handlingRxSlot);
 
+        const int mm = s.currentMm;
+
         if (! receivedOk)
         {
-            endSyncCapture();
-
-            juce::MessageManager::callAsync ([]
+            if (s.subStep == Sy99AutoSync64SubStep::wait8101)
             {
-                if (auto& host = sy99LibrarySyncHost(); host.failAuto64OnUi != nullptr)
-                    host.failAuto64OnUi();
-            });
+                juce::Logger::writeToLog ("[AutoSync64] WARN timeout 8101 "
+                                          + sy99AutoSync64SlotLabel (mm) + " — skip slot");
+                advanceAuto64AfterSlotPair (s);
+                sy99LibrarySyncRequestUiRefresh();
+                return;
+            }
+
+            if (! s.retry0040Pending)
+            {
+                s.retry0040Pending = true;
+                juce::Logger::writeToLog ("[AutoSync64] WARN timeout 0040 "
+                                          + sy99AutoSync64SlotLabel (mm) + " — retry");
+                sy99Sym7ScheduleGapFromLastTx (s.pacing, kSym7IntraSlot0040DelayMs);
+                sy99LibrarySyncRequestUiRefresh();
+                return;
+            }
+
+            juce::Logger::writeToLog ("[AutoSync64] WARN 0040 missing "
+                                      + sy99AutoSync64SlotLabel (mm) + " — 8101-only");
+            advanceAuto64AfterSlotPair (s);
+            sy99LibrarySyncRequestUiRefresh();
             return;
         }
 
-        const int receivedMm = s.currentMm;
-
         sy99Sym7RecordRxLatency (s.pacing);
+
+        if (s.subStep == Sy99AutoSync64SubStep::wait8101)
+        {
+            if (! sy99BatchContainsLmTag (batch, "8101VC"))
+            {
+                juce::Logger::writeToLog ("[AutoSync64] WARN unexpected RX (expected 8101VC) mm="
+                                          + juce::String::toHexString (mm));
+                return;
+            }
+
+            for (const auto& m : batch)
+                s.accumulator.add (m);
+
+            sy99LibrarySyncWritePreviewSlot (Sy99LibraryContentPage::internalVoices,
+                                             mm,
+                                             sy99PreviewNameFromSysexMessages (batch));
+            s.stepsCompleted += (int) batch.size();
+            s.loadedCount = s.accumulator.size();
+            s.subStep = Sy99AutoSync64SubStep::wait0040;
+            s.retry0040Pending = false;
+            sy99Sym7ScheduleGapFromLastTx (s.pacing, kSym7IntraSlot0040DelayMs);
+            sy99LibrarySyncLogTiming (s.pacing,
+                                      sy99AutoSync64SlotLabel (mm) + " 8101 -> 0040");
+            sy99LibrarySyncRequestUiRefresh();
+            return;
+        }
+
+        if (! sy99BatchContainsLmTag (batch, "0040VC"))
+        {
+            juce::Logger::writeToLog ("[AutoSync64] WARN unexpected RX (expected 0040VC) mm="
+                                      + juce::String::toHexString (mm));
+            return;
+        }
 
         for (const auto& m : batch)
             s.accumulator.add (m);
 
-        sy99LibrarySyncWritePreviewSlot (Sy99LibraryContentPage::internalVoices,
-                                         receivedMm,
-                                         sy99PreviewNameFromSysexMessages (batch));
+        s.stepsCompleted += (int) batch.size();
         s.loadedCount = s.accumulator.size();
-        sy99LibrarySyncRequestUiRefresh();
+        ++s.paired0040Count;
 
-        if (s.currentMm >= kSy99AutoSyncInternalVoiceCount - 1)
+        YamahaLmVoiceDump::Lm0040VcMinimal p0040;
+
+        if (YamahaLmVoiceDump::parseLm0040VcMinimalFromSysexMessages (batch, p0040)
+            && p0040.found0040)
         {
-            const File saved = saveAutoSync64CombinedCapture (s.accumulator);
-
-            endSyncCapture();
-
-            juce::MessageManager::callAsync ([saved]()
-            {
-                if (auto& host = sy99LibrarySyncHost(); host.finishAuto64OnUi != nullptr)
-                    host.finishAuto64OnUi (saved);
-            });
-            return;
+            juce::Logger::writeToLog ("[AutoSync64] mm="
+                                      + juce::String::toHexString (mm).paddedLeft ('0', 2)
+                                      + " paired 0040 len="
+                                      + juce::String (batch[0].getRawDataSize())
+                                      + " "
+                                      + YamahaLmVoiceDump::formatLm0040VcMinimalLogLine (p0040));
         }
 
-        ++s.currentMm;
-        sy99Sym7ScheduleGapFromLastTx (s.pacing, kSym7VcInterRequestDelayMs);
-        sy99LibrarySyncLogTiming (s.pacing,
-                                sy99AutoSync64SlotLabel (s.currentMm - 1) + " -> "
-                                    + sy99AutoSync64SlotLabel (s.currentMm));
+        sy99LibrarySyncRequestUiRefresh();
+        advanceAuto64AfterSlotPair (s);
     }
 
     void processFullLibrarySlot (const juce::Array<juce::MidiMessage>& batch, bool receivedOk) noexcept

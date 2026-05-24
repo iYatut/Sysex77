@@ -10,6 +10,7 @@
 
 #include "LiveSynthState.h"
 #include "Sy99ParamRegistry.h"
+#include "Sy99VoiceCaptureIndexCache.h"
 #include "YamahaLmVoiceDump.h"
 
 namespace Sy99LibraryApi
@@ -24,20 +25,6 @@ namespace Sy99LibraryApi
             multiInternal
         };
 
-        struct VoiceCaptureIndex
-        {
-            juce::Array<int> offsets;
-            juce::Array<int> lengths;
-            juce::StringArray names;
-            juce::Array<int> elmodeRaws;
-        };
-
-        struct CaptureFileIndexCacheEntry
-        {
-            juce::int64 modTimeMs = 0;
-            VoiceCaptureIndex index;
-        };
-
         struct VoiceDetailCacheEntry
         {
             juce::int64 captureModTimeMs = 0;
@@ -45,7 +32,6 @@ namespace Sy99LibraryApi
         };
 
         juce::CriticalSection gLibraryApiCacheLock;
-        juce::HashMap<juce::String, CaptureFileIndexCacheEntry> gCaptureIndexCache;
         juce::HashMap<juce::String, VoiceDetailCacheEntry> gVoiceDetailCache;
 
         int pageSlotCount (Page page) noexcept
@@ -111,25 +97,6 @@ namespace Sy99LibraryApi
             return libraryCapturesDirPath().getChildFile (namePrefix + ".syx");
         }
 
-        juce::String previewNameFromSysexFrame (const juce::uint8* data, int size) noexcept
-        {
-            static const char* kPreviewLmTags[] = { "8101VC", "8101MU" };
-
-            for (const char* tag : kPreviewLmTags)
-            {
-                if (! YamahaLmVoiceDump::frameContainsLmTag (data, size, tag))
-                    continue;
-
-                char name[11] {};
-                YamahaLmVoiceDump::copyLm8101BlockName (data, size, tag, name, (int) sizeof (name));
-
-                if (name[0] != '\0')
-                    return juce::String (name).trimEnd();
-            }
-
-            return {};
-        }
-
         juce::File captureFileForPage (Page page) noexcept
         {
             switch (page)
@@ -165,171 +132,58 @@ namespace Sy99LibraryApi
             return juce::String::charToString (banks[mm / 16]) + juce::String ((mm % 16) + 1);
         }
 
-        bool buildVoiceCaptureIndex (const juce::File& bankFile, VoiceCaptureIndex& index) noexcept
+        const Sy99CaptureManifestSlot* manifestSlotForMm (const Sy99CaptureManifest& manifest,
+                                                          Page page,
+                                                          int mm) noexcept
         {
-            index.offsets.clear();
-            index.lengths.clear();
-            index.names.clear();
-            index.elmodeRaws.clear();
+            if (const Sy99CaptureManifestSlot* direct = manifest.slotAt (mm))
+                return direct;
 
-            if (! bankFile.existsAsFile())
-                return false;
-
-            juce::MemoryBlock mb;
-
-            if (! bankFile.loadFileAsData (mb))
-                return false;
-
-            const auto* const data = static_cast<const juce::uint8*> (mb.getData());
-            const size_t total = mb.getSize();
-
-            for (size_t i = 0; i < total;)
+            if (page == Page::multiInternal)
             {
-                if (data[i] != 0xF0)
-                {
-                    ++i;
-                    continue;
-                }
-
-                const size_t frameStart = i;
-                size_t j = i + 1;
-
-                while (j < total && data[j] != 0xF7)
-                    ++j;
-
-                if (j >= total)
-                    break;
-
-                const int frameLen = (int) (j - frameStart + 1);
-
-                if (! YamahaLmVoiceDump::frameContainsLmTag (data + frameStart, frameLen, "8101VC"))
-                {
-                    i = j + 1;
-                    continue;
-                }
-
-                juce::String name;
-                YamahaLmVoiceDump::Lm8101VcMinimal parsed;
-                int elmodeRaw = -1;
-
-                if (YamahaLmVoiceDump::parseLm8101VcMinimal (data + frameStart, frameLen, parsed)
-                    && parsed.name[0] != '\0')
-                {
-                    name = juce::String (parsed.name).trimEnd();
-                    elmodeRaw = parsed.elmodeRaw;
-                }
-                else if (frameStart + 43 <= total)
-                {
-                    for (int a = 0; a < 10; ++a)
-                    {
-                        const juce::uint8 c = data[frameStart + 33 + a];
-                        const char ch = (c >= 0x20 && c < 0x7F) ? (char) c : ' ';
-                        name += juce::String::charToString ((juce_wchar) ch);
-                    }
-
-                    name = name.trimEnd();
-
-                    if (frameStart + 32 < total)
-                        elmodeRaw = (int) data[frameStart + 32];
-                }
-
-                index.names.add (name);
-                index.elmodeRaws.add (elmodeRaw);
-                index.offsets.add ((int) frameStart);
-                index.lengths.add (frameLen);
-                i = j + 1;
+                for (const auto& slot : manifest.slots)
+                    if (slot.mm == mm)
+                        return &slot;
             }
 
-            return index.offsets.size() > 0;
+            if (mm >= 0 && mm < manifest.slots.size())
+                return &manifest.slots.getReference (mm);
+
+            return nullptr;
         }
 
-        const VoiceCaptureIndex* findCachedVoiceCaptureIndex (const juce::File& capture) noexcept
+        juce::String voiceNameFromManifest (Page page,
+                                            int mm,
+                                            const Sy99CaptureManifest& manifest) noexcept
         {
-            if (! capture.existsAsFile())
-                return nullptr;
+            if (const auto* slot = manifestSlotForMm (manifest, page, mm))
+                return slot->name.trimEnd();
 
-            const juce::String key = capture.getFullPathName();
-            const juce::int64 modTimeMs = capture.getLastModificationTime().toMilliseconds();
+            return {};
+        }
 
-            const juce::ScopedLock lock (gLibraryApiCacheLock);
+        bool manifestVoiceIndexArrays (const Sy99CaptureManifest& manifest,
+                                       juce::Array<int>& offsets,
+                                       juce::Array<int>& lengths) noexcept
+        {
+            offsets.clear();
+            lengths.clear();
 
-            if (gCaptureIndexCache.contains (key)
-                && gCaptureIndexCache[key].modTimeMs == modTimeMs)
-                return &gCaptureIndexCache[key].index;
+            for (const auto& slot : manifest.slots)
+            {
+                if (! slot.tag.equalsIgnoreCase ("8101VC"))
+                    continue;
 
-            auto& entry = gCaptureIndexCache.getReference (key);
-            entry.modTimeMs = modTimeMs;
-            entry.index = {};
-            buildVoiceCaptureIndex (capture, entry.index);
+                offsets.add (slot.offset);
+                lengths.add (slot.length);
+            }
 
-            if (entry.index.offsets.isEmpty())
-                return nullptr;
-
-            return &entry.index;
+            return offsets.size() > 0;
         }
 
         juce::String voiceDetailCacheKey (Page page, int mm, juce::int64 captureModTimeMs) noexcept
         {
             return pageSlug (page) + ":" + juce::String (mm) + "@" + juce::String (captureModTimeMs);
-        }
-
-        juce::StringArray loadMultiNamesFromCapture (const juce::File& file, int slotCount) noexcept
-        {
-            juce::StringArray names;
-
-            for (int i = 0; i < slotCount; ++i)
-                names.add ({});
-
-            if (! file.existsAsFile())
-                return names;
-
-            juce::MemoryBlock data;
-
-            if (! file.loadFileAsData (data))
-                return names;
-
-            const auto* bytes = static_cast<const juce::uint8*> (data.getData());
-            const size_t size = data.getSize();
-            int slot = 0;
-
-            for (size_t i = 0; i < size && slot < slotCount; ++i)
-            {
-                if (bytes[i] != 0xF0)
-                    continue;
-
-                size_t end = i + 1;
-
-                while (end < size && bytes[end] != 0xF7)
-                    ++end;
-
-                if (end >= size || bytes[end] != 0xF7)
-                    break;
-
-                const int frameLen = (int) (end - i + 1);
-                names.set (slot, previewNameFromSysexFrame (bytes + i, frameLen));
-                ++slot;
-                i = end;
-            }
-
-            return names;
-        }
-
-        juce::String voiceNameForMm (Page page, int mm, const VoiceCaptureIndex& index) noexcept
-        {
-            if (page == Page::multiInternal)
-            {
-                const auto names = loadMultiNamesFromCapture (captureFileForPage (page), pageSlotCount (page));
-
-                if (mm >= 0 && mm < names.size())
-                    return names[mm].trimEnd();
-
-                return {};
-            }
-
-            if (mm >= 0 && mm < index.names.size())
-                return index.names[mm].trimEnd();
-
-            return {};
         }
 
         bool libraryHasCaptures() noexcept
@@ -397,14 +251,7 @@ namespace Sy99LibraryApi
 
         const juce::File capture = captureFileForPage (page);
         const int slotCount = pageSlotCount (page);
-        const VoiceCaptureIndex* indexPtr = findCachedVoiceCaptureIndex (capture);
-        VoiceCaptureIndex emptyIndex;
-
-        if (indexPtr == nullptr && page != Page::multiInternal)
-        {
-            buildVoiceCaptureIndex (capture, emptyIndex);
-            indexPtr = emptyIndex.offsets.isEmpty() ? nullptr : &emptyIndex;
-        }
+        const Sy99CaptureManifest* manifestPtr = sy99GetCaptureManifest (capture, true);
 
         auto* root = new juce::DynamicObject();
         root->setProperty ("pageId", pageSlug (page));
@@ -419,8 +266,8 @@ namespace Sy99LibraryApi
         {
             juce::String name;
 
-            if (indexPtr != nullptr)
-                name = voiceNameForMm (page, mm, *indexPtr);
+            if (manifestPtr != nullptr)
+                name = voiceNameFromManifest (page, mm, *manifestPtr);
 
             if (name.isEmpty())
                 name = slotCodeForMm (page, mm);
@@ -430,9 +277,16 @@ namespace Sy99LibraryApi
             voice->setProperty ("slotCode", slotCodeForMm (page, mm));
             voice->setProperty ("name", name);
 
-            if (indexPtr != nullptr && mm >= 0 && mm < indexPtr->elmodeRaws.size())
-                voice->setProperty ("elmodeRaw", indexPtr->elmodeRaws[mm]);
+            if (manifestPtr != nullptr)
+            {
+                if (const auto* slot = manifestSlotForMm (*manifestPtr, page, mm))
+                {
+                    if (slot->elmodeRaw >= 0)
+                        voice->setProperty ("elmodeRaw", slot->elmodeRaw);
+                }
+            }
 
+            voice->setProperty ("hasDetail", capture.existsAsFile());
             voices.add (voice);
         }
 
@@ -484,15 +338,34 @@ namespace Sy99LibraryApi
                 return gVoiceDetailCache[cacheKey].payload;
         }
 
-        const VoiceCaptureIndex* indexPtr = findCachedVoiceCaptureIndex (capture);
+        const Sy99CaptureManifest* manifestPtr = sy99GetCaptureManifest (capture, true);
 
-        if (indexPtr == nullptr || mm >= indexPtr->offsets.size())
+        if (manifestPtr == nullptr)
         {
-            errorOut = "voice frame not found in capture";
+            errorOut = "capture manifest unavailable";
             return {};
         }
 
-        const VoiceCaptureIndex& index = *indexPtr;
+        const Sy99CaptureManifest& manifest = *manifestPtr;
+        const Sy99CaptureManifestSlot* slot = manifestSlotForMm (manifest, page, mm);
+
+        if (slot == nullptr || slot->length <= 0)
+        {
+            errorOut = "voice frame not found in capture manifest";
+            return {};
+        }
+
+        juce::Array<int> offsets;
+        juce::Array<int> lengths;
+        manifestVoiceIndexArrays (manifest, offsets, lengths);
+
+        const int voiceIndex = offsets.indexOf (slot->offset);
+
+        if (voiceIndex < 0)
+        {
+            errorOut = "voice frame offset missing in manifest";
+            return {};
+        }
 
         LiveSynthState state;
         state.reset();
@@ -500,14 +373,15 @@ namespace Sy99LibraryApi
         juce::MemoryBlock frame;
         juce::String sliceError;
 
-        if (! extractBankVoiceFrameSlice (capture, mm, index.offsets, index.lengths, frame, sliceError))
+        if (! extractBankVoiceFrameSlice (capture, voiceIndex, offsets, lengths, frame, sliceError))
         {
             errorOut = sliceError.isNotEmpty() ? sliceError : juce::String ("failed to read voice frame");
             return {};
         }
 
         YamahaLmVoiceDump::Lm8101VcMinimal parsed8101;
-        YamahaLmVoiceDump::parseLm8101VcMinimal (frame.getData(), frame.getSize(), parsed8101);
+        YamahaLmVoiceDump::parseLm8101VcMinimal (frame.getData(), frame.getSize(), parsed8101,
+                                                 YamahaLmVoiceDump::Lm8101ParseMode::ingest);
 
         YamahaLmVoiceDump::Lm0040VcMinimal parsed0040;
         juce::MemoryBlock bankData;
@@ -515,13 +389,11 @@ namespace Sy99LibraryApi
         if (capture.loadFileAsData (bankData))
         {
             const auto* bytes = static_cast<const juce::uint8*> (bankData.getData());
-            const int slotOffset = index.offsets[mm];
-            const int slotLength = index.lengths[mm];
             int pairedOff = -1;
             int pairedLen = 0;
 
             if (YamahaLmVoiceDump::findPaired0040FrameAfter (bytes, bankData.getSize(),
-                                                              slotOffset + slotLength,
+                                                              slot->offset + slot->length,
                                                               pairedOff, pairedLen))
             {
                 YamahaLmVoiceDump::parseLm0040VcMinimal (bytes + (size_t) pairedOff,
@@ -529,13 +401,13 @@ namespace Sy99LibraryApi
             }
         }
 
-        if (! ingestVoiceSlotIntoLiveSynthState (state, mm, capture, index.offsets, index.lengths))
+        if (! ingestVoiceSlotIntoLiveSynthState (state, voiceIndex, capture, offsets, lengths))
         {
             errorOut = "failed to parse voice dump";
             return {};
         }
 
-        juce::String voiceName = voiceNameForMm (page, mm, index);
+        juce::String voiceName = slot->name.trimEnd();
 
         if (voiceName.isEmpty() && state.lmVoiceName[0] != '\0')
             voiceName = juce::String (state.lmVoiceName).trimEnd();

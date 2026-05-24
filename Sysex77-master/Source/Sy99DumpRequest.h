@@ -222,7 +222,7 @@ inline void sendSy99InternalVoiceDumpRequest (uint8 sysexDeviceByte,
                               tailVariant);
 }
 
-/** SYM7-style bulk request: F0 43 2n 7A LM␠␠ [6-char type] 00 00 00×12 [byte28] [mm] F7 (31 B). */
+/** SYM7-style LM bulk request (8101VC, 0040VC, 8101SY, 0040MU, …): 31 B, mm @ byte 29. */
 inline juce::MidiMessage buildSym78101BulkRequest (uint8 sysexDeviceByte,
                                                    const char* lmType6,
                                                    uint8 byte28,
@@ -264,7 +264,7 @@ inline void sendSym78101BulkRequest (uint8 sysexDeviceByte,
                                                               byte28,
                                                               memoryNumber);
 
-    juce::Logger::writeToLog ("[DumpReq] TX 8101 type=" + juce::String (lmType6 != nullptr ? lmType6 : "?")
+    juce::Logger::writeToLog ("[DumpReq] TX SYM7 type=" + juce::String (lmType6 != nullptr ? lmType6 : "?")
                               + " b28=" + juce::String::toHexString ((int) byte28).paddedLeft ('0', 2)
                               + " mm=" + juce::String::toHexString ((int) memoryNumber).paddedLeft ('0', 2)
                               + " " + formatSy99DumpRequestHex (msg));
@@ -281,6 +281,16 @@ inline void sendSym78101VcRequest (uint8 sysexDeviceByte,
 {
     sendSym78101BulkRequest (sysexDeviceByte,
                              "8101VC",
+                             byte28,
+                             uint8 (juce::jlimit (0, 63, (int) memoryNumber)));
+}
+
+inline void sendSym7VcRequest (uint8 sysexDeviceByte,
+                               uint8 memoryNumber,
+                               uint8 byte28 = 0) noexcept
+{
+    sendSym78101BulkRequest (sysexDeviceByte,
+                             "0040VC",
                              byte28,
                              uint8 (juce::jlimit (0, 63, (int) memoryNumber)));
 }

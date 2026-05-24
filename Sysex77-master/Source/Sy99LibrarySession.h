@@ -11,7 +11,9 @@
 
 #include "LiveSynthState.h"
 #include "Sy99BulkLibraryCapture.h"
+#include "Sy99VoiceCaptureIndexCache.h"
 #include "VoicesTableModel.h"
+#include "Sy99BankClickSlot.h"
 #include "YamahaLmVoiceDump.h"
 
 inline constexpr const char* kSy99LibrarySessionBankLabel = "SY-99";
@@ -41,6 +43,39 @@ inline bool sy99IsCanonicalAutoloadCaptureFileName (const juce::String& fileName
     }
 
     return false;
+}
+
+/** Full-sync AUTOSYNC captures — kept on disk for audit, hidden from BANK list. */
+inline bool sy99IsHiddenSyncCaptureFileName (const juce::String& fileName) noexcept
+{
+    if (! fileName.endsWithIgnoreCase (".syx"))
+        return false;
+
+    const juce::String base = fileName.upToLastOccurrenceOf (".", false, false);
+    return base.startsWithIgnoreCase ("AUTOSYNC-");
+}
+
+/** True when captures/ has .syx files but every one is a hidden AUTOSYNC sync artifact. */
+inline bool sy99CapturesDirHasOnlyHiddenSyncCaptures() noexcept
+{
+    const juce::File cap = sy99EnsureLibraryCapturesDir();
+
+    if (! cap.isDirectory())
+        return false;
+
+    juce::Array<juce::File> capFiles;
+    cap.findChildFiles (capFiles, juce::File::findFiles, false, "*.syx");
+
+    if (capFiles.isEmpty())
+        return false;
+
+    for (const auto& f : capFiles)
+    {
+        if (! sy99IsHiddenSyncCaptureFileName (f.getFileName()))
+            return false;
+    }
+
+    return true;
 }
 
 inline bool sy99IsSy99LibrarySessionBankLabel (const juce::String& bankLabel) noexcept
@@ -132,6 +167,49 @@ inline juce::PropertiesFile* sy99UserSettingsFile() noexcept
     return props.getUserSettings();
 }
 
+inline void midiPersistSaveOpenDevices (const juce::StringArray& inputIdentifiers,
+                                        const juce::StringArray& outputIdentifiers) noexcept
+{
+    if (auto* settings = sy99UserSettingsFile())
+    {
+        settings->setValue ("midiOpenInputIds", inputIdentifiers.joinIntoString ("|"));
+        settings->setValue ("midiOpenOutputIds", outputIdentifiers.joinIntoString ("|"));
+        settings->saveIfNeeded();
+    }
+}
+
+inline void midiPersistLoadOpenDeviceIds (juce::StringArray& inputIdentifiers,
+                                          juce::StringArray& outputIdentifiers) noexcept
+{
+    inputIdentifiers.clear();
+    outputIdentifiers.clear();
+
+    if (auto* settings = sy99UserSettingsFile())
+    {
+        inputIdentifiers.addTokens (settings->getValue ("midiOpenInputIds", ""), "|", "");
+        outputIdentifiers.addTokens (settings->getValue ("midiOpenOutputIds", ""), "|", "");
+        inputIdentifiers.removeEmptyStrings (true);
+        outputIdentifiers.removeEmptyStrings (true);
+    }
+}
+
+inline void midiPersistSaveMonitorOptions (bool showSysExOnly) noexcept
+{
+    if (auto* settings = sy99UserSettingsFile())
+    {
+        settings->setValue ("midiMonitorSysExOnly", showSysExOnly ? 1 : 0);
+        settings->saveIfNeeded();
+    }
+}
+
+inline void midiPersistLoadMonitorOptions (bool& showSysExOnly) noexcept
+{
+    showSysExOnly = false;
+
+    if (auto* settings = sy99UserSettingsFile())
+        showSysExOnly = settings->getIntValue ("midiMonitorSysExOnly", 0) != 0;
+}
+
 inline void libraryLoadPersistedSelectionFromDisk() noexcept
 {
     libraryLoadPersistedSelection (sy99UserSettingsFile());
@@ -142,13 +220,19 @@ inline void librarySavePersistedSelectionToDisk() noexcept
     librarySavePersistedSelection (sy99UserSettingsFile());
 }
 
-struct Sy99VoiceCaptureIndex
+inline bool sy99BuildVoiceCaptureIndex (const juce::File& bankFile,
+                                        Sy99VoiceCaptureIndex& index) noexcept
 {
-    juce::Array<int> offsets;
-    juce::Array<int> lengths;
-    juce::StringArray names;
-    bool built = false;
-};
+    index = {};
+
+    if (const Sy99CaptureManifest* manifest = sy99GetCaptureManifest (bankFile, true))
+    {
+        sy99CopyManifestToVoiceIndex (*manifest, index);
+        return index.built;
+    }
+
+    return false;
+}
 
 struct Sy99LibrarySession
 {
@@ -191,85 +275,6 @@ inline juce::Array<juce::File> sy99DiscoverCanonicalSyncCapturesOnDisk() noexcep
     }
 
     return found;
-}
-
-inline bool sy99BuildVoiceCaptureIndex (const juce::File& bankFile,
-                                        Sy99VoiceCaptureIndex& index) noexcept
-{
-    index.offsets.clear();
-    index.lengths.clear();
-    index.names.clear();
-    index.built = false;
-
-    if (! bankFile.existsAsFile())
-        return false;
-
-    juce::MemoryBlock mb;
-
-    if (! bankFile.loadFileAsData (mb))
-        return false;
-
-    const auto* const data = static_cast<const juce::uint8*> (mb.getData());
-    const size_t total = mb.getSize();
-
-    if (total == 0)
-        return false;
-
-    size_t i = 0;
-
-    while (i < total)
-    {
-        if (data[i] != 0xF0)
-        {
-            ++i;
-            continue;
-        }
-
-        const size_t frameStart = i;
-        size_t j = i + 1;
-
-        while (j < total && data[j] != 0xF7)
-            ++j;
-
-        if (j >= total)
-            break;
-
-        const int frameLen = (int) (j - frameStart + 1);
-
-        if (! YamahaLmVoiceDump::frameContainsLmTag (data + frameStart, frameLen, "8101VC"))
-        {
-            i = j + 1;
-            continue;
-        }
-
-        juce::String str;
-        YamahaLmVoiceDump::Lm8101VcMinimal parsed;
-
-        if (YamahaLmVoiceDump::parseLm8101VcMinimal (data + frameStart, frameLen, parsed)
-            && parsed.name[0] != '\0')
-        {
-            str = juce::String (parsed.name).trimEnd();
-        }
-        else if (frameStart + 43 <= total)
-        {
-            for (int a = 0; a < 10; ++a)
-            {
-                const juce::uint8 c = data[frameStart + 33 + a];
-                const char ch = (c >= 0x20 && c < 0x7F) ? (char) c : ' ';
-                str += juce::String::charToString ((juce_wchar) ch);
-            }
-
-            str = str.trimEnd();
-        }
-
-        index.names.add (str);
-        index.offsets.add ((int) frameStart);
-        index.lengths.add (frameLen);
-        i = j + 1;
-    }
-
-    index.built = index.offsets.size() > 0;
-    return index.built;
 }
 
 inline void sy99InvalidateSy99LibrarySessionCaches() noexcept
@@ -416,6 +421,7 @@ inline void selectLibrarySlotWithEditor (Sy99LibraryContentPage page, int mm) no
     if (libraryPageIsMulti (page))
     {
         selectLibraryPageSlotExclusive (0, mm);
+        bankSelectedVoiceIndex = mm;
 
         if (! libraryVoiceSuppressProgramChangeSend())
         {
@@ -423,6 +429,7 @@ inline void selectLibrarySlotWithEditor (Sy99LibraryContentPage page, int mm) no
                 programChange (mm);
         }
 
+        librarySavePersistedSelectionToDisk();
         return;
     }
 
@@ -445,45 +452,7 @@ inline void selectLibrarySlotWithEditor (Sy99LibraryContentPage page, int mm) no
     bankSelectedVoiceIndex = mm;
     clearEditorPatchDirty();
 
-    const bool parsed = ingestLm8101FromBankVoiceSlotAndLog (mm, capture,
-                                                             index->offsets, index->lengths);
-
-    if (parsed)
-        getLiveSynthState().clearLiveParam9Overrides();
-
-    juce::String notifyName;
-
-    if (parsed && getLiveSynthState().lmVoiceName[0] != '\0')
-        notifyName = juce::String (getLiveSynthState().lmVoiceName).trimEnd();
-    else if (mm < index->names.size())
-        notifyName = index->names[mm].trimEnd();
-    else
-        notifyName = libraryPageSlotCode (mm);
-
-    if (parsed || notifyName.isNotEmpty())
-    {
-        bankSelectedVoiceName = notifyName;
-        bankSelectedVoiceNameValue.setValue (juce::var (bankSelectedVoiceName));
-    }
-
-    bankVoiceSlotApplyTrigger.setValue (++bankVoiceSlotApplyNonce);
-
-    if (auto& highlight = libraryVoiceHighlightCallback(); highlight != nullptr)
-    {
-        if (page == Sy99LibraryContentPage::internalVoices)
-            highlight (mm);
-        else
-            selectLibraryPageSlotExclusive (mm / 16, mm % 16);
-    }
-
-    if (auto& opened = libraryVoiceOpenedCallback(); opened != nullptr)
-        opened (mm, notifyName);
-
-    if (! libraryVoiceSuppressProgramChangeSend())
-    {
-        if (auto& programChange = libraryVoiceProgramChangeCallback(); programChange != nullptr)
-            programChange (mm);
-    }
+    sy99OpenVoiceSlotFromCapture (page, mm, capture, index->offsets, index->lengths, &index->names);
 
     librarySavePersistedSelectionToDisk();
 }
@@ -492,6 +461,12 @@ inline bool sy99ShouldUseSy99SlotEditor() noexcept
 {
     return sy99LibrarySession().active
            && sy99IsSy99LibrarySessionBankLabel (bankSelected);
+}
+
+inline bool& libraryPersistedRestoreCompleted() noexcept
+{
+    static bool done = false;
+    return done;
 }
 
 inline void sy99RestoreLibrarySlotFromPersistence() noexcept
@@ -503,7 +478,10 @@ inline void sy99RestoreLibrarySlotFromPersistence() noexcept
     const int mm = libraryPersistedSlotMm();
     const auto page = libraryContentPageFromId ((juce::uint8) juce::jlimit (0, 4, pageId));
 
-    libraryContentPage() = page;
+    if (auto& restore = libraryContentPageRestoreCallback(); restore != nullptr)
+        restore (page);
+    else
+        libraryContentPage() = page;
 
     if (mm < 0)
         return;
@@ -517,4 +495,17 @@ inline void sy99RestoreLibrarySlotFromPersistence() noexcept
     {
         selectLibrarySlotWithEditor (page, mm);
     }
+}
+
+/** Once per app launch — safe when BankTableModel restore races Librairie ctor. */
+inline void sy99TryRestoreLibraryFromPersistenceOnce() noexcept
+{
+    if (libraryPersistedRestoreCompleted())
+        return;
+
+    if (! sy99LibrarySession().active)
+        return;
+
+    libraryPersistedRestoreCompleted() = true;
+    sy99RestoreLibrarySlotFromPersistence();
 }

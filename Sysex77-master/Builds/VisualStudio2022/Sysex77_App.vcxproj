@@ -148,6 +148,7 @@
   <ItemGroup>
     <ClCompile Include="..\..\Source\Main.cpp"/>
     <ClCompile Include="..\..\Source\Sy99LibraryApi.cpp"/>
+    <ClCompile Include="..\..\Source\Sy99VoiceCaptureIndexCache.cpp"/>
     <ClCompile Include="..\..\Source\Sy99MasterCatalog.cpp"/>
     <ClCompile Include="..\..\Source\Sy99LibraryReviewApi.cpp"/>
     <ClCompile Include="..\..\Source\Sy99ParamRegistry.cpp"/>

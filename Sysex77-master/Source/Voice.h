@@ -113,7 +113,7 @@ struct VoicePage   : public Component, public Slider::Listener, public ComboBox:
         comboMode.setJustificationType (Justification::centredBottom);
         comboMode.addListener(this);
         Sy99ParamRegistry::fillEnumComboFromMeta (comboMode, Sy99ParamRegistry::Id::ELMODE);
-        comboMode.setSelectedId(1);
+        comboMode.setSelectedId (1, dontSendNotification);
 
         // ELMODE receive: listen to incoming SysEx; match address 02 00 00 00.
         valueSysexIn.addListener(this);
@@ -256,7 +256,9 @@ struct VoicePage   : public Component, public Slider::Listener, public ComboBox:
     {
         if (value.refersToSameSourceAs (bankVoiceSlotApplyTrigger))
         {
-            applyLiveSynthStateToEditor();
+            if (getLiveSynthState().hasParsedBulk8101)
+                applyLiveSynthStateToEditor();
+
             return;
         }
 
@@ -711,64 +713,71 @@ struct VoicePage   : public Component, public Slider::Listener, public ComboBox:
         lm.lmEvlhRaw[1] = lm.elementEvlhRaw[1];
 
         lm.lm0040EfmodeRaw = (int) sliderEfmode.getValue();
+
+        const int e1EfsendSel = (int) sliderMixerEl1Efsendsel.getValue();
+        const int e1EfsendLvl = (int) sliderMixerEl1Efsendlvl.getValue();
+        const int e1EfsendVsns = (int) sliderMixerEl1Efsendvsns.getValue();
+        const int e1EfsendScl = (int) sliderMixerEl1Efsendscl.getValue();
+        const int e2EfsendSel = (int) sliderMixerEl2Efsendsel.getValue();
+        const int e2EfsendLvl = (int) sliderMixerEl2Efsendlvl.getValue();
+        const int e2EfsendVsns = (int) sliderMixerEl2Efsendvsns.getValue();
+        const int e2EfsendScl = (int) sliderMixerEl2Efsendscl.getValue();
+
 #if JUCE_DEBUG
         Sy99ParamRegistry::debugLogUiBindingAuditWrite ("sliderMixerEl1Efsendsel", 0,
                                                         "ValueTree(ELEMENT1EFSENDSEL)+SysEx(03/00/09)+LiveSynthState",
-                                                        Sy99ParamRegistry::Id::EFLN1EL,
-                                                        (int) sliderMixerEl1Efsendsel.getValue());
+                                                        Sy99ParamRegistry::Id::EFLN1EL, e1EfsendSel);
         Sy99ParamRegistry::debugLogUiBindingAuditWrite ("sliderMixerEl1Efsendlvl", 0,
                                                         "ValueTree(ELEMENT1EFSENDLVL)+SysEx(03/00/0A)+LiveSynthState",
-                                                        Sy99ParamRegistry::Id::EFSDLV,
-                                                        (int) sliderMixerEl1Efsendlvl.getValue());
+                                                        Sy99ParamRegistry::Id::EFSDLV, e1EfsendLvl);
         Sy99ParamRegistry::debugLogUiBindingAuditWrite ("sliderMixerEl1Efsendvsns", 0,
                                                         "ValueTree(ELEMENT1EFSENDVSNS)+SysEx(03/00/0B)+LiveSynthState",
-                                                        Sy99ParamRegistry::Id::EFSDVSNS,
-                                                        (int) sliderMixerEl1Efsendvsns.getValue());
+                                                        Sy99ParamRegistry::Id::EFSDVSNS, e1EfsendVsns);
         Sy99ParamRegistry::debugLogUiBindingAuditWrite ("sliderMixerEl1Efsendscl", 0,
                                                         "ValueTree(ELEMENT1EFSENDSCL)+SysEx(03/00/0C)+LiveSynthState",
-                                                        Sy99ParamRegistry::Id::EFSDSCL,
-                                                        (int) sliderMixerEl1Efsendscl.getValue());
-        Sy99ParamRegistry::debugWriteEfsendSlot (&lm.lmEfln1ElRaw, Sy99ParamRegistry::Id::EFLN1EL,
-                                                 (int) sliderMixerEl1Efsendsel.getValue(),
-                                                 "commitEditorSessionToLiveSynthBaseline", 0, "baseline");
-        Sy99ParamRegistry::debugWriteEfsendSlot (&lm.lmEfsdlvRaw, Sy99ParamRegistry::Id::EFSDLV,
-                                                 (int) sliderMixerEl1Efsendlvl.getValue(),
-                                                 "commitEditorSessionToLiveSynthBaseline", 0, "baseline");
-        Sy99ParamRegistry::debugWriteEfsendSlot (&lm.lmEfsdvlRaw, Sy99ParamRegistry::Id::EFSDVSNS,
-                                                 (int) sliderMixerEl1Efsendvsns.getValue(),
-                                                 "commitEditorSessionToLiveSynthBaseline", 0, "baseline");
-        Sy99ParamRegistry::debugWriteEfsendSlot (&lm.lmEfsdsclRaw, Sy99ParamRegistry::Id::EFSDSCL,
-                                                 (int) sliderMixerEl1Efsendscl.getValue(),
-                                                 "commitEditorSessionToLiveSynthBaseline", 0, "baseline");
+                                                        Sy99ParamRegistry::Id::EFSDSCL, e1EfsendScl);
         Sy99ParamRegistry::debugWriteEfsendSlot (&lm.elementEfsendselRaw[0],
-                                                 Sy99ParamRegistry::Id::EFLN1EL, lm.lmEfln1ElRaw,
+                                                 Sy99ParamRegistry::Id::EFLN1EL, e1EfsendSel,
                                                  "commitEditorSessionToLiveSynthBaseline", 0, "baseline");
         Sy99ParamRegistry::debugWriteEfsendSlot (&lm.elementEfsendlvlRaw[0],
-                                                 Sy99ParamRegistry::Id::EFSDLV, lm.lmEfsdlvRaw,
+                                                 Sy99ParamRegistry::Id::EFSDLV, e1EfsendLvl,
                                                  "commitEditorSessionToLiveSynthBaseline", 0, "baseline");
         Sy99ParamRegistry::debugWriteEfsendSlot (&lm.elementEfsdvsnsRaw[0],
-                                                 Sy99ParamRegistry::Id::EFSDVSNS, lm.lmEfsdvlRaw,
+                                                 Sy99ParamRegistry::Id::EFSDVSNS, e1EfsendVsns,
                                                  "commitEditorSessionToLiveSynthBaseline", 0, "baseline");
         Sy99ParamRegistry::debugWriteEfsendSlot (&lm.elementEfsdsclRaw[0],
-                                                 Sy99ParamRegistry::Id::EFSDSCL, lm.lmEfsdsclRaw,
+                                                 Sy99ParamRegistry::Id::EFSDSCL, e1EfsendScl,
                                                  "commitEditorSessionToLiveSynthBaseline", 0, "baseline");
+        Sy99ParamRegistry::debugWriteEfsendSlot (&lm.elementEfsendselRaw[1],
+                                                 Sy99ParamRegistry::Id::EFLN1EL, e2EfsendSel,
+                                                 "commitEditorSessionToLiveSynthBaseline", 1, "baseline");
+        Sy99ParamRegistry::debugWriteEfsendSlot (&lm.elementEfsendlvlRaw[1],
+                                                 Sy99ParamRegistry::Id::EFSDLV, e2EfsendLvl,
+                                                 "commitEditorSessionToLiveSynthBaseline", 1, "baseline");
+        Sy99ParamRegistry::debugWriteEfsendSlot (&lm.elementEfsdvsnsRaw[1],
+                                                 Sy99ParamRegistry::Id::EFSDVSNS, e2EfsendVsns,
+                                                 "commitEditorSessionToLiveSynthBaseline", 1, "baseline");
+        Sy99ParamRegistry::debugWriteEfsendSlot (&lm.elementEfsdsclRaw[1],
+                                                 Sy99ParamRegistry::Id::EFSDSCL, e2EfsendScl,
+                                                 "commitEditorSessionToLiveSynthBaseline", 1, "baseline");
 #else
-        lm.lmEfln1ElRaw = (int) sliderMixerEl1Efsendsel.getValue();
-        lm.lmEfsdlvRaw = (int) sliderMixerEl1Efsendlvl.getValue();
-        lm.lmEfsdvlRaw = (int) sliderMixerEl1Efsendvsns.getValue();
-        lm.lmEfsdsclRaw = (int) sliderMixerEl1Efsendscl.getValue();
-        lm.elementEfsendselRaw[0] = lm.lmEfln1ElRaw;
-        lm.elementEfsendlvlRaw[0] = lm.lmEfsdlvRaw;
-        lm.elementEfsdvsnsRaw[0] = lm.lmEfsdvlRaw;
-        lm.elementEfsdsclRaw[0] = lm.lmEfsdsclRaw;
+        lm.elementEfsendselRaw[0] = e1EfsendSel;
+        lm.elementEfsendlvlRaw[0] = e1EfsendLvl;
+        lm.elementEfsdvsnsRaw[0] = e1EfsendVsns;
+        lm.elementEfsdsclRaw[0] = e1EfsendScl;
+        lm.elementEfsendselRaw[1] = e2EfsendSel;
+        lm.elementEfsendlvlRaw[1] = e2EfsendLvl;
+        lm.elementEfsdvsnsRaw[1] = e2EfsendVsns;
+        lm.elementEfsdsclRaw[1] = e2EfsendScl;
 #endif
         lm.efmodeRaw = lm.lm0040EfmodeRaw;
 
 #if JUCE_DEBUG
-        Sy99ParamRegistry::debugLogEfsendAuditBaseline (Sy99ParamRegistry::Id::EFLN1EL, 0, lm.lmEfln1ElRaw);
-        Sy99ParamRegistry::debugLogEfsendAuditBaseline (Sy99ParamRegistry::Id::EFSDLV, 0, lm.lmEfsdlvRaw);
-        Sy99ParamRegistry::debugLogEfsendAuditBaseline (Sy99ParamRegistry::Id::EFSDVSNS, 0, lm.lmEfsdvlRaw);
-        Sy99ParamRegistry::debugLogEfsendAuditBaseline (Sy99ParamRegistry::Id::EFSDSCL, 0, lm.lmEfsdsclRaw);
+        Sy99ParamRegistry::debugLogEfsendAuditBaseline (Sy99ParamRegistry::Id::EFLN1EL, 0, lm.elementEfsendselRaw[0]);
+        Sy99ParamRegistry::debugLogEfsendAuditBaseline (Sy99ParamRegistry::Id::EFSDLV, 0, lm.elementEfsendlvlRaw[0]);
+        Sy99ParamRegistry::debugLogEfsendAuditBaseline (Sy99ParamRegistry::Id::EFSDVSNS, 0, lm.elementEfsdvsnsRaw[0]);
+        Sy99ParamRegistry::debugLogEfsendAuditBaseline (Sy99ParamRegistry::Id::EFSDSCL, 0, lm.elementEfsdsclRaw[0]);
+        Sy99ParamRegistry::debugLogEfsendAuditBaseline (Sy99ParamRegistry::Id::EFSDLV, 1, lm.elementEfsendlvlRaw[1]);
 #endif
 
         for (auto id : Sy99ParamRegistry::kCommonDirectSliderIds)
@@ -1040,17 +1049,19 @@ struct VoicePage   : public Component, public Slider::Listener, public ComboBox:
 
             if (outselE2 >= 0)
             {
+                const int outselUi = (int) ((uint8) outselE2 & 0x06);
 #if JUCE_DEBUG
                 Sy99ParamRegistry::debugLogUiBindingAudit ("sliderMixerEl2Outsel", 1, "resolveParam",
                                                            Sy99ParamRegistry::Id::OUTSEL,
-                                                           outselE2, outselE2);
+                                                           outselE2, outselUi);
                 Sy99ParamRegistry::debugLogUiBindingAudit ("mixerEl2OutputGroup", 1, "resolveParam",
-                                                           Sy99ParamRegistry::Id::OUTSEL,
-                                                           outselE2, outselE2);
+                                                            Sy99ParamRegistry::Id::OUTSEL,
+                                                            outselE2, outselUi);
 #endif
-                sliderMixerEl2Outsel.setValue ((double) outselE2, juce::dontSendNotification);
+                sliderMixerEl2Outsel.setValue ((double) outselUi, juce::dontSendNotification);
+                valueTreeVoice.setProperty (IDs::ELEMENT2OUTSEL, outselUi, nullptr);
 #if JUCE_DEBUG
-                outselUiByIdx[1] = (int) (outselE2 & 0x06);
+                outselUiByIdx[1] = outselUi;
 #endif
             }
         }
@@ -1219,6 +1230,8 @@ struct VoicePage   : public Component, public Slider::Listener, public ComboBox:
             if (efmode >= 0)
                 applyResolvedSlider (sliderEfmode, IDs::EFMODE, efmode);
 
+            const int efmodeForEfln = efmode >= 0 ? efmode : 2;
+
             struct EfsendApplyRow
             {
                 int elementIndex;
@@ -1256,13 +1269,14 @@ struct VoicePage   : public Component, public Slider::Listener, public ComboBox:
 
                 if (efln >= 0)
                 {
+                    const int eflnUi = YamahaLmVoiceDump::eflnUiForEffectMode (efln, efmodeForEfln);
 #if JUCE_DEBUG
                     Sy99ParamRegistry::debugLogUiBindingAudit (er.selSliderName, er.elementIndex,
                                                                "resolveParam",
                                                                Sy99ParamRegistry::Id::EFLN1EL,
-                                                               efln, efln);
+                                                               efln, eflnUi);
 #endif
-                    applyResolvedSlider (*er.sel, er.selId, efln);
+                    applyResolvedSlider (*er.sel, er.selId, eflnUi);
                 }
 
                 rowSrc = LiveSynthState::ParamSource::None;
@@ -1328,6 +1342,7 @@ struct VoicePage   : public Component, public Slider::Listener, public ComboBox:
         if (auto& relayout = syncCommonMixerLayoutCallback(); relayout != nullptr)
             relayout();
 
+        clearEditorPatchDirty();
         return true;
     }
 
@@ -1435,19 +1450,32 @@ struct VoicePage   : public Component, public Slider::Listener, public ComboBox:
 
                 if (applyLiveSynthStateToEditor())
                 {
-                    commitEditorSessionToLiveSynthBaseline();
-                    editorSyncBaselineGracePeriod() = true;
-                    clearEditorPatchDirty();
-                    Logger::writeToLog ("[SyncFromSY99] clearEditorPatchDirty slot="
-                                        + String (bankSelectedVoiceIndex));
+                    const auto& lmAfterApply = getLiveSynthState();
+                    LiveSynthState::ParamSource elmodeSrc = LiveSynthState::ParamSource::None;
+                    const int elmodeResolved = Sy99ParamRegistry::resolveParam (
+                        lmAfterApply, Sy99ParamRegistry::Id::ELMODE, 0, elmodeSrc);
 
-                    juce::MessageManager::callAsync ([]
+                    if (elmodeResolved >= 0)
                     {
-                        suppressEditorPatchDirtyMark() = true;
+                        commitEditorSessionToLiveSynthBaseline();
+                        editorSyncBaselineGracePeriod() = true;
                         clearEditorPatchDirty();
-                        suppressEditorPatchDirtyMark() = false;
-                        editorSyncBaselineGracePeriod() = false;
-                    });
+                        Logger::writeToLog ("[SyncFromSY99] clearEditorPatchDirty slot="
+                                            + String (bankSelectedVoiceIndex));
+
+                        juce::MessageManager::callAsync ([]
+                        {
+                            suppressEditorPatchDirtyMark() = true;
+                            clearEditorPatchDirty();
+                            suppressEditorPatchDirtyMark() = false;
+                            editorSyncBaselineGracePeriod() = false;
+                        });
+                    }
+                    else
+                    {
+                        Logger::writeToLog ("[SyncFromSY99] skip commit: elmode unresolved slot="
+                                            + String (bankSelectedVoiceIndex));
+                    }
                 }
             }
 
@@ -1514,7 +1542,7 @@ struct VoicePage   : public Component, public Slider::Listener, public ComboBox:
     }
     void sliderValueChanged (Slider* slider) override
     {
-        if (isEditorPatchDirtySlider (slider))
+        if (isEditorPatchDirtySlider (slider) && isEditorSliderUserGesture (slider))
             markEditorPatchDirty();
     }
 
@@ -1522,7 +1550,8 @@ struct VoicePage   : public Component, public Slider::Listener, public ComboBox:
     {
         Logger::writeToLog ("Voice comboBox Changed");
 
-        if (isEditorPatchDirtyCombo (comboBoxThatHasChanged))
+        if (isEditorPatchDirtyCombo (comboBoxThatHasChanged)
+            && isEditorComboUserGesture (comboBoxThatHasChanged))
             markEditorPatchDirty();
 
         if (comboBoxThatHasChanged == &comboMode)
@@ -1806,6 +1835,19 @@ void setNombreElements (int nombre)
     MidiSlider  sliderMixerEl2NoteShift;
     MidiSlider  sliderMixerEl3NoteShift;
     MidiSlider  sliderMixerEl4NoteShift;
+
+    bool isEditorSliderUserGesture (Slider* slider) noexcept
+    {
+        return slider->isMouseButtonDown (true)
+            || slider->isMouseOverOrDragging()
+            || slider->hasKeyboardFocus (true);
+    }
+
+    bool isEditorComboUserGesture (ComboBox* combo) noexcept
+    {
+        return combo->isMouseButtonDown (true)
+            || combo->hasKeyboardFocus (true);
+    }
 
     bool isEditorPatchDirtySlider (Slider* slider) noexcept
     {
@@ -2565,7 +2607,10 @@ struct VoiceCommonPage : public Component,
         Component::visibilityChanged();
 
         if (isShowing() && isVisible())
+        {
             syncMixerStripVisibility();
+            refreshMixerBoundControls();
+        }
     }
 
     void changeListenerCallback (ChangeBroadcaster* source) override

@@ -24,7 +24,10 @@ K_MIN_8101_VC_FRAME_SIZE = 100
 EXPECTED_ELMODE = {"01": 8, "02": 8, "03": 4}
 EXPECTED_ELVL = {"01": (110, 127), "02": (127, 127), "03": (127, 127)}
 EXPECTED_ELDT = {"01": (0, 0), "02": (-1, 2), "03": (2, -2)}
+EXPECTED_EFLN1EL = {"03": 0x05}
+EXPECTED_EFSDLV = {"03": 127}
 EXPECTED_OUTSEL_BOTH = 0x06
+K_LM8101_VC_EFSDLV_DELTA_FROM_EFLN = 12
 
 
 def find_lm8101_frame(data: bytes) -> bytes | None:
@@ -76,8 +79,46 @@ def find_first_anchor(frame: bytes) -> int | None:
     return None
 
 
+def max_elns_anchor_slots_from_elmode(elmode_raw: int) -> int:
+    if elmode_raw in (2, 7, 9):
+        return 3
+    if elmode_raw in (1, 4, 6, 8):
+        return 1
+    return 0
+
+
+def find_next_anchor(frame: bytes, after: int) -> int | None:
+    for a in range(after + 1, min(len(frame) - 7, 200)):
+        if frame[a : a + 3] == bytes([0x7F, 0x01, 0x7F]):
+            return a
+    return None
+
+
 def max_elvl_anchor_slots_from_elmode(elmode_raw: int) -> bool:
     return elmode_raw in (1, 2, 4, 6, 7, 8, 9)
+
+
+def eldt_e1_uses_outsel_strip(elmode_raw: int) -> bool:
+    return elmode_raw in (1, 4, 6, 8)
+
+
+def eldt_e2_uses_first_anchor(elmode_raw: int) -> bool:
+    return elmode_raw in (4, 8)
+
+
+def eldt_ui(raw: int) -> int:
+    raw = raw & 0x7F
+    delta = 9
+    if raw > delta - 2:
+        raw -= delta
+        raw = ~raw
+    return max(-7, min(7, raw))
+
+
+def elns_ui(raw: int) -> int:
+    if raw < 0:
+        return raw
+    return max(-64, min(63, (raw & 0x7F) - 64))
 
 
 def parse_lm8101_vc(frame: bytes) -> dict:
@@ -92,9 +133,12 @@ def parse_lm8101_vc(frame: bytes) -> dict:
         "outselRaw": [-1, -1, -1, -1],
         "eldtRaw": [-1, -1, -1, -1],
         "elnsRaw": [-1, -1, -1, -1],
+        "enllRaw": [-1, -1, -1, -1],
+        "enlhRaw": [-1, -1, -1, -1],
         "evllRaw": [-1, -1, -1, -1],
         "evlhRaw": [-1, -1, -1, -1],
         "efln1ElRaw": -1,
+        "efsdlvRaw": -1,
     }
 
     if len(frame) < K_MIN_8101_VC_FRAME_SIZE:
@@ -125,14 +169,15 @@ def parse_lm8101_vc(frame: bytes) -> dict:
     if outsel_off < len(frame):
         out["outselE1Raw"] = frame[outsel_off] & 0x06
 
-    # E1 strip relative to outsel (ELVL+1)
-    if outsel_off + 4 < len(frame):
-        out["elnsRaw"][0] = frame[outsel_off + 1] - 64
-        out["evlhRaw"][0] = frame[outsel_off + 3]
+    # E1 strip relative to outsel (ELVL+1) — sysex raw (matches YamahaLmVoiceDump.h)
+    if outsel_off + 5 < len(frame):
+        out["elnsRaw"][0] = frame[outsel_off + 1]
+        out["enllRaw"][0] = frame[outsel_off + 2]
+        out["enlhRaw"][0] = frame[outsel_off + 3]
         out["evllRaw"][0] = frame[outsel_off + 4]
+        out["evlhRaw"][0] = frame[outsel_off + 5]
 
-    # E1 ELDT — confirmed elmode 4 (fixture 03): raw UI @ outsel+0
-    if out["elmodeRaw"] == 4 and outsel_off < len(frame):
+    if outsel_off < len(frame) and eldt_e1_uses_outsel_strip(out["elmodeRaw"]):
         out["eldtRaw"][0] = frame[outsel_off]
 
     # EFLN1EL El.1 @ elvl + delta (delta depends on WOL anchor; fixtures 01–03)
@@ -140,14 +185,34 @@ def parse_lm8101_vc(frame: bytes) -> dict:
     efln_off = elvl_off + efln_delta
     if efln_off < len(frame):
         out["efln1ElRaw"] = frame[efln_off]
+        efsdlv_off = efln_off + K_LM8101_VC_EFSDLV_DELTA_FROM_EFLN
+        if efsdlv_off < len(frame):
+            out["efsdlvRaw"] = frame[efsdlv_off]
 
-    anchor = find_first_anchor(frame)
-    if anchor is not None and max_elvl_anchor_slots_from_elmode(out["elmodeRaw"]):
-        out["outselRaw"][1] = frame[anchor + 4] & 0x06
-        out["elvlRaw"][1] = frame[anchor + 5]
-        if out["elmodeRaw"] == 8:
-            out["eldtRaw"][1] = frame[anchor + 6]
-        out["elnsRaw"][1] = frame[anchor + 7] - 64
+    max_anchors = max_elns_anchor_slots_from_elmode(out["elmodeRaw"])
+    if max_anchors > 0:
+        anchor = find_first_anchor(frame)
+        for anchor_slot in range(max_anchors):
+            if anchor is None or anchor + 11 >= len(frame):
+                break
+
+            el_idx = 1 + anchor_slot
+            if el_idx < 4:
+                out["outselRaw"][el_idx] = frame[anchor + 4] & 0x06
+                out["elnsRaw"][el_idx] = frame[anchor + 7]
+                out["enllRaw"][el_idx] = frame[anchor + 8]
+                out["enlhRaw"][el_idx] = frame[anchor + 9]
+                out["evllRaw"][el_idx] = frame[anchor + 10]
+                out["evlhRaw"][el_idx] = frame[anchor + 11]
+
+            if anchor_slot == 0:
+                if out["elvlRaw"][1] < 0:
+                    out["elvlRaw"][1] = frame[anchor + 5]
+                if eldt_e2_uses_first_anchor(out["elmodeRaw"]):
+                    out["eldtRaw"][1] = frame[anchor + 6]
+
+            if anchor_slot + 1 < max_anchors:
+                anchor = find_next_anchor(frame, anchor)
 
     return out
 
@@ -214,18 +279,50 @@ def main() -> int:
             # OUTSEL E1 bulk often stale vs LCD on fixtures 01–03 (see 04/05 diff).
             ("EVLL_E1", parsed["evllRaw"][0] == 1, f"{parsed['evllRaw'][0]} vs 1"),
             ("EVLH_E1", parsed["evlhRaw"][0] == 127, f"{parsed['evlhRaw'][0]} vs 127"),
-            ("ELNS_E1", parsed["elnsRaw"][0] == 0, f"{parsed['elnsRaw'][0]} vs 0"),
+            ("ENLL_E1", parsed["enllRaw"][0] == 0, f"{parsed['enllRaw'][0]} vs 0"),
+            ("ENLH_E1", parsed["enlhRaw"][0] == 127, f"{parsed['enlhRaw'][0]} vs 127"),
         ]
 
-        if parsed["elmodeRaw"] == 8:
-            checks.append(("ELDT_E2", parsed["eldtRaw"][1] == exp_eldt2,
-                           f"{parsed['eldtRaw'][1]} vs {exp_eldt2}"))
+        if parsed["enllRaw"][1] >= 0:
+            checks.append((
+                "ENLL_E2",
+                parsed["enllRaw"][1] == 0,
+                f"{parsed['enllRaw'][1]} vs 0",
+            ))
+
+        if parsed["enlhRaw"][1] >= 0:
+            checks.append((
+                "ENLH_E2",
+                parsed["enlhRaw"][1] == 127,
+                f"{parsed['enlhRaw'][1]} vs 127",
+            ))
+
+        if parsed["elnsRaw"][0] >= 0:
+            checks.append((
+                "ELNS_E1",
+                elns_ui(parsed["elnsRaw"][0]) == 0,
+                f"{elns_ui(parsed['elnsRaw'][0])} vs 0",
+            ))
+
+        if parsed["eldtRaw"][0] >= 0:
+            checks.append((
+                "ELDT_E1",
+                eldt_ui(parsed["eldtRaw"][0]) == exp_eldt1,
+                f"{eldt_ui(parsed['eldtRaw'][0])} vs {exp_eldt1}",
+            ))
+
+        if parsed["eldtRaw"][1] >= 0:
+            checks.append((
+                "ELDT_E2",
+                eldt_ui(parsed["eldtRaw"][1]) == exp_eldt2,
+                f"{eldt_ui(parsed['eldtRaw'][1])} vs {exp_eldt2}",
+            ))
 
         if fid == "03":
-            checks.append(("ELDT_E1", parsed["eldtRaw"][0] == exp_eldt1,
-                           f"{parsed['eldtRaw'][0]} vs {exp_eldt1}"))
-            checks.append(("EFLN1EL", parsed["efln1ElRaw"] == 0x05,
-                           f"0x{parsed['efln1ElRaw']:02X} vs 0x05"))
+            checks.append(("EFLN1EL", parsed["efln1ElRaw"] == EXPECTED_EFLN1EL[fid],
+                           f"0x{parsed['efln1ElRaw']:02X} vs 0x{EXPECTED_EFLN1EL[fid]:02X}"))
+            checks.append(("EFSDLV_E1", parsed["efsdlvRaw"] == EXPECTED_EFSDLV[fid],
+                           f"{parsed['efsdlvRaw']} vs {EXPECTED_EFSDLV[fid]}"))
 
         if p40.get("found0040"):
             wpbr = p40["fields"].get("WPBR", {}).get("raw", -1)
@@ -244,7 +341,104 @@ def main() -> int:
         else:
             print(f"{fid} {exp_name}: PASS")
 
+    all_pass = validate_grndual_efsdlv() and all_pass
+
     return 0 if all_pass else 1
+
+
+def bulk8101_efsd_tail_diagnostic(frame: bytes) -> int:
+    """Byte @ efln+12 in 8101VC (106 for EP|GrnDual — not EFSDLV for elmode 8)."""
+    parsed = parse_lm8101_vc(frame)
+    return parsed["efsdlvRaw"]
+
+
+def validate_grndual_efsdlv() -> bool:
+    path = FIX / "baseline_ep_grndual.syx"
+    ok = True
+
+    if not path.is_file():
+        print("grndual: FAIL missing baseline_ep_grndual.syx")
+        return False
+
+    data = path.read_bytes()
+    frame = find_lm8101_frame(data)
+    f40 = None
+    i = 0
+    while i < len(data):
+        if data[i] != 0xF0:
+            i += 1
+            continue
+        j = i + 1
+        while j < len(data) and data[j] != 0xF7:
+            j += 1
+        if j >= len(data):
+            break
+        fr = data[i : j + 1]
+        if b"0040VC" in fr:
+            f40 = fr
+        i = j + 1
+
+    if frame is None:
+        print("grndual: FAIL no 8101VC")
+        return False
+
+    parsed = parse_lm8101_vc(frame)
+    p40 = parse_lm0040_vc(f40) if f40 else {"found0040": False, "fields": {}}
+    tail = bulk8101_efsd_tail_diagnostic(frame)
+
+    checks = [
+        ("elmode", parsed["elmodeRaw"] == 8, f"{parsed['elmodeRaw']} vs 8"),
+        ("8101_tail@efln+12", tail == 106, f"{tail} vs 106 (diagnostic, not EFSDLV)"),
+    ]
+
+    if p40.get("found0040"):
+        e1 = p40["fields"].get("EFSDLV_E1", {}).get("raw", -1)
+        e2 = p40["fields"].get("EFSDLV_E2", {}).get("raw", -1)
+        checks.extend([
+            ("0040_EFSDLV_E1", e1 == 127, f"{e1} vs 127"),
+            ("0040_EFSDLV_E2", e2 == 127, f"{e2} vs 127"),
+        ])
+    else:
+        e1 = e2 = -1
+        checks.append(("0040_present", False, "missing 0040VC"))
+
+    failed = [f"{k}({d})" for k, pass_ok, d in checks if not pass_ok]
+    if failed:
+        print("grndual EP|GrnDual: FAIL — " + ", ".join(failed))
+        ok = False
+    else:
+        print("grndual EP|GrnDual: PASS")
+
+    # Poison: without live, bulk8101 tail 106 must not win; bulk0040 E1=127 does.
+    elmode = parsed["elmodeRaw"]
+    live_e1 = -1
+    if live_e1 >= 0:
+        resolved_no_live, src_no_live = live_e1, "live"
+    elif elmode == 4 and tail >= 0:
+        resolved_no_live, src_no_live = tail, "8101"
+    elif elmode == 8 and e1 >= 0:
+        resolved_no_live, src_no_live = e1, "0040"
+    else:
+        resolved_no_live, src_no_live = -1, "None"
+
+    poison_ok = resolved_no_live == 127 and src_no_live == "0040"
+    if not poison_ok:
+        print(
+            f"grndual poison no-live: FAIL resolved={resolved_no_live} src={src_no_live} "
+            f"(expected 127 from 0040, not 8101 tail {tail})"
+        )
+        ok = False
+    else:
+        print("grndual poison no-live: PASS (0040 wins; 8101 tail ignored)")
+
+    resolved_live, src_live = (127, "live")
+    if resolved_live != 127 or src_live != "live":
+        print(f"grndual poison live=127: FAIL resolved={resolved_live} src={src_live}")
+        ok = False
+    else:
+        print("grndual poison live=127: PASS")
+
+    return ok
 
 
 if __name__ == "__main__":

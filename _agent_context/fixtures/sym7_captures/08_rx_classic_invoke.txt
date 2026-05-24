@@ -1,0 +1,32 @@
+# RX — patch invoke EP:Classic (SY99 → host, 2026-05-24)
+# Slot: A06 (mm=05)
+
+## Frame 1 — 8101VC (~832 B)
+
+- Tag: LM 8101VC
+- Name: EP:Classic
+- Header elmode area: elmode 4 (EP voice)
+
+## Frame 2 — 0040VC (115 B)  Δ ~27 ms
+
+F0 43 00 7A 00 6B 4C 4D 20 20 30 30 34 30 56 43 00 00
+00 00 00 00 00 00 00 00 00 00 00 00 05 06 04 02 1F 00
+12 00 48 02 09 00 12 00 18 00 08 03 73 00 05 00 00 00
+10 64 64 2C 00 0E 00 07 00 0A 00 08 00 08 00 0A 00 0F
+00 57 00 28 00 64 27 64 07 64 64 07 06 05 14 00 00 00
+63 00 00 63 7F 7F 07 06 05 14 00 00 00 3C 0F 7F 00 00
+0F 64 00 00 00 00 00 00 00 00 78 F7
+
+Parsed:
+  length = 115
+  EFSDLV E1 @ byte 100 = 0x7F (127)
+  EFSDLV E2 @ byte 104 = 0x7F (127)
+  elmode = 4
+
+## Frame 3 — param9 ELMODE
+
+F0 43 10 34 02 00 00 00 00 04 F7  → elmode = 4
+
+## PASS criteria for Sysex77 BankClick
+
+Ingest paired 0040VC from AUTOSYNC-VC-INT.syx → UI Effect Send **127 / 127**, no lazy TX 0040.

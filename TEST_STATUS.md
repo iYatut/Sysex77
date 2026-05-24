@@ -41,12 +41,22 @@
 | Mixer / Element | ENLH Note Limit High (`03 EE 00 04`, `ELEMENTnNOTELIMITHIGH`, `sliderMixerEl1..4NoteLimitHigh`) | PENDING | PENDING | N/A | PASS | IMPLEMENTED 2026-05-20. UI note names `getMidiNoteName(_,true,true,3)`; TEMP UI default 127 until patch restore; live SY99 test pending. |
 | Mixer / Element | EVLL Velocity Limit Low (`03 EE 00 05`, `ELEMENTnVELOCITYLIMITLOW`, `sliderMixerEl1..4VelocityLimitLow`) | PENDING | PENDING | N/A | PASS | IMPLEMENTED 2026-05-20. UI 0..127; same MidiSlider/valueSysexIn path as ELVL. Live SY99 test pending. |
 | Mixer / Element | EVLH Velocity Limit High (`03 EE 00 06`, `ELEMENTnVELOCITYLIMITHIGH`, `sliderMixerEl1..4VelocityLimitHigh`) | PENDING | PENDING | N/A | PASS | IMPLEMENTED 2026-05-20. UI 0..127; same path as EVLL. Live SY99 test pending. |
+| Mixer / Element | EFSDLV Effect Send Level | TODO | TODO | N/A | **TODO** | **HW RX PASS:** ANONIM 127/127, Classic 127/127 (`08_rx_classic_invoke.txt`), NiteHwk 127/100 (`07_rx_nitehwk_invoke.txt`). **Code 2026-05-24:** #30 interleaved → `AUTOSYNC-VC-INT.syx`, paired ingest, lazy 0040 fallback + deferred queue. **Next:** rebuild + BankClick A6/A7 without TX 0040. |
 | App lifecycle | Стартовая синхронизация UI ← состояние синта | N/A | N/A | TODO | TODO | Implemented: Config «Startup sync on MIDI connect» (default OFF) sends edit-buffer dump request once when In+Out open. Hardware verify pending — see `SYM7_library_sync_progress.md`. |
+| Editor UX | Exit gate (dirty patch) | N/A | N/A | N/A | **PASS** | 2026-05-23 HW: первый голос без диалога; save/gate после правок — OK. Phase 2 (store на SY99) — отложена до SYM7 capture #7–8. |
 | Diagnostics | Исходящие / трассировка (Debug окно, DBG, FileLogger рядом с exe) | N/A | N/A | N/A | TODO | `Sysex77_OUT.log` — служебный лог. **SysEx-only** TX/RX — **`Sysex77_MIDI.log`** рядом с exe (без CC/PC/clock). Путь при старте: `[MidiStream] SysEx-only log: …`. |
+| Library / Web | L1 manifest + L2 parse ladder (`/library/sy99/internal`) | N/A | N/A | N/A | **TODO** | FIX 2026-05-24: `.syx.idx` offset=0 → BankClick fail; repair dedup last-mm per voice + fileOffset on save. Smoke A: FullLibrarySync → click slot 10 EP\|GrnDual → `[BankClick] parsed8101`, dual layout, params ≠ 0. Fixtures: `_validate_manifest_offsets.py`, `_validate_capture_manifest.py`. |
+| Library / BankClick | Voice slot ingest → editor apply (offline `.syx`) | N/A | TODO | N/A | **TODO** | **2026-05-24:** interleaved #30 → `AUTOSYNC-VC-INT.syx`, paired 0040 ingest, deferred lazy fetch. Offline: `_validate_paired_autosync.py` PASS. HW smoke pending rebuild. |
 
-### Test procedure for next item
+### Test procedure — EFSDLV / BankClick 0040VC
 
-Следующий параметр здесь пока не задан.
+1. ~~RX format~~ **PASS** — ANONIM / Classic / NiteHwk 115 B (fixtures `05`, `08`, `07`).
+2. Rebuild Sysex77 Debug x64.
+3. Auto-sync **#30** → `AUTOSYNC-VC-INT.syx` ~128 frames (64×8101 + 64×0040 interleaved).
+4. BankClick **A6 Classic** → `parsed0040 EFSDLV 127/127`, **no** `fetch0040 TX`.
+5. BankClick **A7 NiteHwk** → UI **127/100** (not 76 from 8101 poison).
+6. Offline: `python _agent_context/fixtures/_validate_paired_autosync.py`.
+7. Зафиксировать PASS/FAIL в EFSDLV row.
 
 ---
 

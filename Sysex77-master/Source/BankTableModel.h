@@ -47,7 +47,13 @@ public:
         sourceModel.owner = this;
         sourceModel.addChangeListener(this);
         libraryLoadPersistedSelectionFromDisk();
-        restoreSy99LibrarySessionOnStartup();
+
+        juce::MessageManager::callAsync ([this]
+        {
+            sy99LibraryStartupState() = Sy99LibraryStartupState::restoring;
+            restoreSy99LibrarySessionOnStartup();
+            sy99LibraryStartupState() = Sy99LibraryStartupState::ready;
+        });
     }
 
     ~BankTableModel()
@@ -220,9 +226,11 @@ public:
         Logger::writeToLog("BankModel: changebrodcaster");
         if (requestSysex == true)
         {
+            if (! sy99AnyLibrarySyncActive())
+                requestSysex = false;
+
             loadBank();
             repaint();
-            requestSysex = false;
             newMessage = false;
         }
         else if(doubleClickBank)
@@ -335,6 +343,8 @@ public:
 
         sourceListBox.updateContent();
         repaint();
+        juce::Logger::writeToLog ("[SY-99] Library session restore complete active="
+                                  + juce::String (sy99LibrarySession().active ? "yes" : "no"));
     }
 
     /** Empty UI when no SY-99 session and no bank selected. */
@@ -367,6 +377,7 @@ public:
         if (! sourceFile.copyFileTo (dest))
             return false;
 
+        sy99WriteCaptureManifestFromScan (dest);
         selectBankFileAndReloadVoices (dest);
         return true;
     }
@@ -458,92 +469,34 @@ public:
             return;
         }
 
-        MemoryBlock mb;
-
-        if (! bankFile.loadFileAsData (mb))
+        if (const Sy99CaptureManifest* manifest = sy99GetCaptureManifest (bankFile, true))
         {
-            Logger::writeToLog ("[BankLoad] failed to read: " + bankFile.getFullPathName());
-            sendChangeMessage();
-            return;
+            for (const auto& slot : manifest->slots)
+            {
+                if (! slot.tag.equalsIgnoreCase ("8101VC"))
+                    continue;
+
+                arrayListVoices.add (slot.name);
+                voiceSysexFileOffsets.add (slot.offset);
+                voiceSysexFileLengths.add (slot.length);
+            }
+
+            Logger::writeToLog ("[BankLoad] " + bankFile.getFileName() + ": "
+                                + String (arrayListVoices.size()) + " voice(s) from manifest");
+        }
+        else
+        {
+            Logger::writeToLog ("[BankLoad] manifest unavailable: " + bankFile.getFullPathName());
         }
 
-        const uint8* const data = (const uint8*) mb.getData();
-        const size_t total = mb.getSize();
-
-        if (total == 0)
-        {
-            Logger::writeToLog ("[BankLoad] empty file: " + bankFile.getFileName());
-            sendChangeMessage();
-            return;
-        }
-
-        size_t i = 0;
-
-        while (i < total)
-        {
-            if (data[i] != 0xF0)
-            {
-                ++i;
-                continue;
-            }
-
-            const size_t frameStart = i;
-            size_t j = i + 1;
-
-            while (j < total && data[j] != 0xF7)
-                ++j;
-
-            if (j >= total)
-                break;
-
-            const int frameLen = (int) (j - frameStart + 1);
-
-            if (! YamahaLmVoiceDump::frameContainsLmTag (data + frameStart, frameLen, "8101VC"))
-            {
-                i = j + 1;
-                continue;
-            }
-
-            String str;
-
-            YamahaLmVoiceDump::Lm8101VcMinimal parsed;
-
-            if (YamahaLmVoiceDump::parseLm8101VcMinimal (data + frameStart, frameLen, parsed)
-                && parsed.name[0] != '\0')
-            {
-                str = String (parsed.name).trimEnd();
-            }
-            else if (frameStart + 43 <= total)
-            {
-                for (int a = 0; a < 10; ++a)
-                {
-                    const uint8 c = data[frameStart + 33 + a];
-                    const char ch = (c >= 0x20 && c < 0x7F) ? (char) c : ' ';
-                    str += String::charToString ((juce_wchar) ch);
-                }
-
-                str = str.trimEnd();
-            }
-
-            arrayListVoices.add (str);
-            voiceSysexFileOffsets.add ((int) frameStart);
-            voiceSysexFileLengths.add (frameLen);
-
-            i = j + 1;
-        }
-
-        Logger::writeToLog ("[BankLoad] " + bankFile.getFileName() + ": "
-                            + String (arrayListVoices.size()) + " voice(s) (8101VC), "
-                            + String ((int64) total) + " bytes");
-
-        if (! arrayListVoices.isEmpty())
+        if (! arrayListVoices.isEmpty() && ! libraryVoiceSuppressAutoSlotOpen())
         {
             int idx = bankSelectedVoiceIndex;
 
             if (idx < 0 || idx >= arrayListVoices.size())
                 idx = 0;
 
-            selectLibraryVoiceSlot (idx % 16, (idx / 16) * 16);
+            selectLibraryVoiceSlotProceed (idx % 16, (idx / 16) * 16);
         }
 
         sendChangeMessage();
@@ -799,8 +752,10 @@ struct SourceItemListboxContents  : public ListBoxModel, public ChangeBroadcaste
 
             for (const auto& f : capFiles)
             {
-                if (! sy99IsCanonicalAutoloadCaptureFileName (f.getFileName()))
-                    userImports.add (f);
+                if (sy99IsHiddenSyncCaptureFileName (f.getFileName()))
+                    continue;
+
+                userImports.add (f);
             }
         }
 

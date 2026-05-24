@@ -163,13 +163,47 @@ SY99 family/model bytes — **capture locally**, не задокументиро
 
 ## 10. Implementation checklist (Sysex77)
 
-- [ ] `Sy99DumpRequest.h` — builder с `makeDeviceByteRequest(0x20 | id)`
-- [ ] `requestSingleVoice(id, mt, mm)` — header + tail (tail verify)
-- [ ] `requestAllInternalVoices()` — loop mm=0..63, пауза между request
-- [ ] Wire в `sendCurrentVoiceDumpRequestPendingVerification()` → mt=7F, mm=00
-- [ ] Wire в `LibrairiePage::beginBulkCapture()` — auto-send перед `requestSysex=true`
+- [x] `Sy99DumpRequest.h` — builder с `makeDeviceByteRequest(0x20 | id)`
+- [x] `requestSingleVoice(id, mt, mm)` — header + tail (tail verify pending HW)
+- [x] `requestAllInternalVoices()` — loop mm=0..63 via Librairie Auto-sync 64 menu
+- [x] Wire в `sendCurrentVoiceDumpRequestPendingVerification()` → mt=7F, mm=00
+- [x] Wire в `LibrairiePage::beginBulkCaptureWithDumpRequest()` — auto-send
 - [ ] Hardware test: compare response vs manual DUMP OUT `.syx`
-- [ ] Log SY Manager startup for tail-byte confirmation
+- [ ] Log SY Manager startup for tail-byte confirmation → см. `fixtures/sym7_captures/`
+
+---
+
+## 15. Sysex77 auto-sync implementation (2026-05-23)
+
+| Feature | Location | Notes |
+|---------|----------|-------|
+| Generic LM0040 builder (VC/MU/SY/MS) | `Sy99DumpRequest.h` | `buildSy99Lm0040DumpRequest` |
+| Auto-sync 64 internal voices | `Librairie.h` | REQUEST VOICE → Auto-sync 64 internal (SYM7-style) |
+| Combined output | `Sy99BulkLibraryCapture.h` | `AUTOSYNC-VOICE64-*.syx` |
+| Startup edit-buffer sync | `LiveSynthState.h`, `MidiDemo.h`, `Config.h` | Opt-in `StartupSyncOnConnect`, default OFF |
+| Agent progress board | `_agent_context/SYM7_library_sync_progress.md` | Capture log, gap matrix |
+
+**Orchestrator flow:** for `mm = 0..63`, send variant A → idle ~6 s → on timeout retry variant B → accumulate RX → save one `.syx`.
+
+---
+
+## 16. SYM7 observed behavior (hardware capture 2026-05-23)
+
+Источник: MIDI-OX + SY Manager; детали — [`fixtures/sym7_captures/sym7_request_sequence.md`](fixtures/sym7_captures/sym7_request_sequence.md).
+
+| Item | SYM7 observed | Sysex77 | Status |
+|------|---------------|---------|--------|
+| Request frame format | **31 B**, zero-pad, **mm @ byte 29** | `buildSym78101BulkRequest()` | ✅ verified |
+| Request tail variant A/B | **not used** | Legacy menu tests only | ✅ |
+| Inter-request delay (8101VC×64) | ~258 ms | 258 ms phase default | ✅ |
+| Inter-request delay (0040VC×64) | ~140–550 ms (typ ~350) | 350 ms phase default | ✅ |
+| Connect handshake | `8101SY` → param9×2 → `0040MU` | Full sync phases 0–1 | ✅ |
+| Internal voice tails | **`0040VC` ×64** after `8101VC` ×64 | `AUTOSYNC-0040VC-INT` phase | ✅ code |
+| Patch invoke (slot N) | **`0040VC` mm=N** | `beginBankClick0040Fetch` | ✅ code |
+| Device Inquiry on connect | not seen in paste | not sent | — |
+| param9 on connect | `43 10 34 0F…34/31` | not sent (manual Bulk Protect) | — |
+
+Progress: [`SYM7_library_sync_progress.md`](SYM7_library_sync_progress.md)
 
 ---
 
@@ -180,7 +214,8 @@ SY99 family/model bytes — **capture locally**, не задокументиро
 | `F0 43 2n 7A` bulk framing | ✅ Official | SY99 MIDI docs |
 | LM type strings VC/MU/SY/MS | ✅ Official | SY99 MIDI docs |
 | Memory_type / Memory# | ✅ Official | SY99 bulk data structure |
-| mt/mm in **request** tail | ⚠️ SY77 extrapolation | SOS SY77 article |
+| mt/mm in **request** tail (variant A/B) | ⚠️ Legacy Sysex77 tests | Not used by SYM7 |
+| SYM7 request mm @ byte 29 | ✅ Verified | MIDI-OX capture 2026-05-23 |
 | Request checksum/length | ⚠️ Unverified | SY77 only |
 | Bulk Protect SysEx | ❌ Unverified | Sysex77 guess |
 | 64-voice = 64 requests | ✅ Logical | No bank-64 type in docs |
@@ -228,7 +263,8 @@ static constexpr uint8 kSy99Lm0040VcTypeString[] = {
 | `Sysex77-master/Source/LiveSynthState.h` | `sendCurrentVoiceDumpRequestPendingVerification()` |
 | `Sysex77-master/Source/Sy99BulkLibraryCapture.h` | Receive pipeline |
 | `Sysex77-master/Source/YamahaLmVoiceDump.h` | Response parser |
-| `Sysex77-master/Source/Librairie.h` | `beginBulkCapture()` |
+| `Sysex77-master/Source/Librairie.h` | `beginBulkCapture()`, auto-sync 64 |
+| `_agent_context/SYM7_library_sync_progress.md` | SYM7 research / agent nav |
 | `_agent_context/sy99_sysex_complete.md` | Parameter change only |
 | `_agent_context/lm_8101_offsets.md` | Payload offsets |
 | `_agent_context/02_sysex_format.md` | Parameter change byte layout |

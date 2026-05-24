@@ -96,11 +96,10 @@ namespace Sy99LibraryBulkRead
 
         if (field == "lmEfsdlvRaw")
         {
-            if (elementIndex == 0)
-                return parsed.lmEfsdlvRaw;
+            if (elementIndex != 0)
+                return -1;
 
-            if (elementIndex == 1
-                && YamahaLmVoiceDump::maxElnsAnchorSlotsFromElmodeRaw (parsed.elmodeRaw) >= 1)
+            if (YamahaLmVoiceDump::efsendBulk8101TrustedForElmodeRaw (parsed.elmodeRaw))
                 return parsed.lmEfsdlvRaw;
 
             return -1;
@@ -132,7 +131,8 @@ namespace Sy99LibraryBulkRead
         if (field == "wllmlRaw")  return parsed.wllmlRaw;
         if (field == "mctunRaw")  return parsed.mctunRaw;
         if (field == "rndpRaw")   return parsed.rndpRaw;
-        if (field == "aftmdRaw")  return parsed.aftmdRaw;
+        if (field == "efsdlvE1Raw") return parsed.efsdlvE1Raw;
+        if (field == "efsdlvE2Raw") return parsed.efsdlvE2Raw;
         if (field == "sptpntRaw") return parsed.sptpntRaw;
         if (field == "efmodeRaw") return parsed.efmodeRaw;
 
@@ -213,8 +213,7 @@ namespace Sy99LibraryBulkRead
                 return -1;
             case Sy99ParamRegistry::Id::EFSDLV:
                 if (elementIndex == 0
-                    || (elementIndex == 1
-                        && YamahaLmVoiceDump::maxElnsAnchorSlotsFromElmodeRaw (parsed8101->elmodeRaw) >= 1))
+                    && YamahaLmVoiceDump::efsendBulk8101TrustedForElmodeRaw (parsed8101->elmodeRaw))
                     return parsed8101->lmEfsdlvRaw;
 
                 return -1;
@@ -225,7 +224,9 @@ namespace Sy99LibraryBulkRead
     }
 
     inline int readParsed0040ByRegistryId (Sy99ParamRegistry::Id id,
-                                           const YamahaLmVoiceDump::Lm0040VcMinimal* parsed0040) noexcept
+                                           int elementIndex,
+                                           const YamahaLmVoiceDump::Lm0040VcMinimal* parsed0040,
+                                           const YamahaLmVoiceDump::Lm8101VcMinimal* parsed8101) noexcept
     {
         if (parsed0040 == nullptr || ! parsed0040->found0040)
             return -1;
@@ -252,9 +253,18 @@ namespace Sy99LibraryBulkRead
             case Sy99ParamRegistry::Id::WLLML:  return parsed0040->wllmlRaw;
             case Sy99ParamRegistry::Id::MCTUN:  return parsed0040->mctunRaw;
             case Sy99ParamRegistry::Id::RNDP:   return parsed0040->rndpRaw;
-            case Sy99ParamRegistry::Id::AFTMD:  return parsed0040->aftmdRaw;
             case Sy99ParamRegistry::Id::SPTPNT: return parsed0040->sptpntRaw;
             case Sy99ParamRegistry::Id::EFMODE: return parsed0040->efmodeRaw;
+            case Sy99ParamRegistry::Id::EFSDLV:
+                if (parsed8101 != nullptr && elementIndex == 0
+                    && YamahaLmVoiceDump::efsendBulk0040E1TrustedForElmodeRaw (parsed8101->elmodeRaw))
+                    return parsed0040->efsdlvE1Raw;
+
+                if (parsed8101 != nullptr && elementIndex == 1
+                    && YamahaLmVoiceDump::efsendBulk0040E2TrustedForElmodeRaw (parsed8101->elmodeRaw))
+                    return parsed0040->efsdlvE2Raw;
+
+                return -1;
             default: break;
         }
 

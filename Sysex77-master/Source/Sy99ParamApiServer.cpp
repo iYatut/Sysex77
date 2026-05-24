@@ -14,6 +14,8 @@
 #include "Sy99ParamRegistry.h"
 #include "Sy99LibraryApi.h"
 #include "Sy99LibraryReviewApi.h"
+#include "Sy99MessageThread.h"
+#include "Sy99VoiceCaptureIndexCache.h"
 
 namespace
 {
@@ -377,6 +379,15 @@ namespace
 
         if (req.path.startsWithIgnoreCase ("/api/library/pages/"))
         {
+            if (sy99LibraryStartupState() == Sy99LibraryStartupState::restoring)
+            {
+                auto* busy = new juce::DynamicObject();
+                busy->setProperty ("error", "library initializing");
+                busy->setProperty ("retryAfterMs", 500);
+                writeJson (client, 503, busy);
+                return;
+            }
+
             const auto route = Sy99LibraryApi::parseLibraryPagesPath (req.path);
 
             if (! route.valid)
@@ -388,6 +399,7 @@ namespace
             if (req.method == "GET" && ! route.isVoiceDetail
                 && req.path.endsWithIgnoreCase ("/voices"))
             {
+                juce::Logger::writeToLog ("[LibraryAPI] GET " + req.path);
                 writeJson (client, 200, Sy99LibraryApi::libraryPageVoicesFromSlug (route.slug));
                 return;
             }
@@ -428,11 +440,19 @@ namespace
 
             juce::String error;
 
-            if (! Sy99ParamRegistry::focusSy99ParameterEditor (id, elementIndex, sysexDevice,
-                                                               rawOverride, error))
+            struct FocusResult { bool ok = false; juce::String error; };
+            const FocusResult focusResult = sy99RunOnMessageThread ([&]() -> FocusResult
             {
-                writeJson (client, 409, errorJson (error.isNotEmpty() ? error
-                                                                      : juce::String ("focus failed")));
+                FocusResult result;
+                result.ok = Sy99ParamRegistry::focusSy99ParameterEditor (id, elementIndex, sysexDevice,
+                                                                         rawOverride, result.error);
+                return result;
+            });
+
+            if (! focusResult.ok)
+            {
+                writeJson (client, 409, errorJson (focusResult.error.isNotEmpty() ? focusResult.error
+                                                                                  : juce::String ("focus failed")));
                 return;
             }
 
@@ -653,13 +673,19 @@ namespace
                 const uint8 sysexDevice = querySysexDeviceByte (req.path);
                 const juce::var body = req.body.isNotEmpty() ? juce::JSON::parse (req.body) : juce::var();
                 const int rawOverride = (int) body.getProperty ("raw", -1);
-                juce::String error;
-
-                if (! Sy99ParamRegistry::focusSy99ParameterEditor (id, elementIndex, sysexDevice,
-                                                                   rawOverride, error))
+                struct FocusResult { bool ok = false; juce::String error; };
+                const FocusResult focusResult = sy99RunOnMessageThread ([&]() -> FocusResult
                 {
-                    writeJson (client, 409, errorJson (error.isNotEmpty() ? error
-                                                                      : juce::String ("focus failed")));
+                    FocusResult result;
+                    result.ok = Sy99ParamRegistry::focusSy99ParameterEditor (id, elementIndex, sysexDevice,
+                                                                             rawOverride, result.error);
+                    return result;
+                });
+
+                if (! focusResult.ok)
+                {
+                    writeJson (client, 409, errorJson (focusResult.error.isNotEmpty() ? focusResult.error
+                                                                                      : juce::String ("focus failed")));
                     return;
                 }
 
@@ -699,23 +725,27 @@ namespace
                     return;
                 }
 
-                if (! Sy99ParamRegistry::applyMetaPatch (id, patch))
+                struct MetaPatchResult { bool ok = false; juce::var record; };
+                const MetaPatchResult patchResult = sy99RunOnMessageThread ([&]() -> MetaPatchResult
+                {
+                    MetaPatchResult result;
+
+                    if (! Sy99ParamRegistry::applyMetaPatch (id, patch))
+                        return result;
+
+                    Sy99ParamRegistry::persistActiveMetaRegistry();
+                    result.record = Sy99ParamRegistry::metaRecordToJsonVar (id);
+                    result.ok = ! result.record.isVoid();
+                    return result;
+                });
+
+                if (! patchResult.ok)
                 {
                     writeJson (client, 400, errorJson ("failed to apply metadata patch"));
                     return;
                 }
 
-                Sy99ParamRegistry::persistActiveMetaRegistry();
-
-                const juce::var record = Sy99ParamRegistry::metaRecordToJsonVar (id);
-
-                if (record.isVoid())
-                {
-                    writeJson (client, 500, errorJson ("patch applied but meta lookup failed"));
-                    return;
-                }
-
-                writeJson (client, 200, record);
+                writeJson (client, 200, patchResult.record);
                 return;
             }
 

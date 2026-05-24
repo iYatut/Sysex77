@@ -206,10 +206,15 @@ private:
 
     void applyRawByteToButtons (uint8 raw)
     {
+        const uint8 efmode = efmodeViaSlider != nullptr
+                                 ? (uint8) (int) efmodeViaSlider->getValue()
+                                 : (uint8) 2;
+        const bool allowSend3 = (efmode == 0x02);
+
         if (btSend1 != nullptr)
             btSend1->setToggleState ((raw & send1Bit) != 0, dontSendNotification);
         if (btSend3 != nullptr)
-            btSend3->setToggleState ((raw & send3Bit) != 0, dontSendNotification);
+            btSend3->setToggleState (allowSend3 && (raw & send3Bit) != 0, dontSendNotification);
     }
 
     uint8 rawByteFromButtons() const
@@ -626,7 +631,8 @@ private:
     {
         s.setLookAndFeel (&effectSendKnobLF);
         s.setSliderStyle (Slider::RotaryVerticalDrag);
-        s.setTextBoxStyle (Slider::NoTextBox, false, 0, 0);
+        s.setTextBoxStyle (Slider::TextBoxBelow, false, 36, 14);
+        s.setNumDecimalPlacesToDisplay (0);
         s.setColour (Slider::thumbColourId, Colours::darkorange);
     }
 

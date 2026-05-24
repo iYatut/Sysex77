@@ -135,7 +135,7 @@ inline int sy99CountSysexFramesInFile (const juce::File& file) noexcept
     return frames;
 }
 
-/** Verify saved .syx frame counts match fast-sync phase plan (224 total). */
+/** Verify saved .syx frame counts match sync phase plan (fast ≈290, extended more). */
 inline bool sy99AuditFullLibrarySyncCaptures (const juce::Array<juce::File>& savedFiles,
                                               bool extended) noexcept
 {

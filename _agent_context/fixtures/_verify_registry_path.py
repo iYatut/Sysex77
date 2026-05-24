@@ -19,13 +19,14 @@ META = {
     "SPTPNT": dict(live="liveSptpntRaw", b8101=None, b0040="lm0040SptpntRaw", cf8101=False, cf0040=True, cand=False, packed=False),
     "EFMODE": dict(live="efmodeRaw", b8101=None, b0040="lm0040EfmodeRaw", cf8101=False, cf0040=True, cand=False, packed=False),
     "ELVL": dict(live="elementLevelRaw", b8101="lmElvlE1Raw", b0040=None, cf8101=True, cf0040=False, cand=False, packed=False, per_el=True),
-    "ATPBR": dict(live="liveAtpbrRaw", b8101=None, b0040="lm0040AtpbrRaw", cf8101=False, cf0040=False, cand=True, packed=False),
-    "PMASN": dict(live="livePmasnRaw", b8101=None, b0040="lm0040PmasnRaw", cf8101=False, cf0040=False, cand=True, packed=False),
-    "AMASN": dict(live="liveAmasnRaw", b8101=None, b0040="lm0040AmasnRaw", cf8101=False, cf0040=False, cand=True, packed=True),
-    "AMRNG": dict(live="liveAmrngRaw", b8101=None, b0040="lm0040AmrngRaw", cf8101=False, cf0040=False, cand=True, packed=True),
-    "MCTUN": dict(live="liveMctunRaw", b8101=None, b0040="lm0040MctunRaw", cf8101=False, cf0040=False, cand=True, packed=False),
+    "ATPBR": dict(live="liveAtpbrRaw", b8101=None, b0040="lm0040AtpbrRaw", cf8101=False, cf0040=True, cand=False, packed=False),
+    "PMASN": dict(live="livePmasnRaw", b8101=None, b0040="lm0040PmasnRaw", cf8101=False, cf0040=True, cand=False, packed=False),
+    "PMRNG": dict(live="livePmrngRaw", b8101=None, b0040="lm0040PmrngRaw", cf8101=False, cf0040=True, cand=False, packed=False),
+    "AMASN": dict(live="liveAmasnRaw", b8101=None, b0040="lm0040AmasnRaw", cf8101=False, cf0040=True, cand=False, packed=True),
+    "AMRNG": dict(live="liveAmrngRaw", b8101=None, b0040="lm0040AmrngRaw", cf8101=False, cf0040=True, cand=False, packed=True),
+    "MCTUN": dict(live="liveMctunRaw", b8101=None, b0040="lm0040MctunRaw", cf8101=False, cf0040=True, cand=False, packed=False),
     "RNDP": dict(live="liveRndpRaw", b8101=None, b0040="lm0040RndpRaw", cf8101=False, cf0040=False, cand=True, packed=True),
-    "AFTMD": dict(live="liveAftmdRaw", b8101=None, b0040="lm0040AftmdRaw", cf8101=False, cf0040=False, cand=True, packed=False),
+    "AFTMD": dict(live="liveAftmdRaw", b8101=None, b0040=None, cf8101=False, cf0040=False, cand=True, packed=False),
 }
 
 
@@ -53,6 +54,10 @@ class State:
         self.liveMctunRaw = -1
         self.liveRndpRaw = -1
         self.liveAftmdRaw = -1
+        self.lmEfsdlvRaw = -1
+        self.lm0040EfsdlvE1Raw = -1
+        self.lm0040EfsdlvE2Raw = -1
+        self.elementEfsendlvlRaw = [-1, -1, -1, -1]
         self.lm0040WpbrRaw = -1
         self.lm0040WllmlRaw = -1
         self.lm0040SptpntRaw = -1
@@ -62,7 +67,6 @@ class State:
         self.lm0040AmrngRaw = -1
         self.lm0040MctunRaw = -1
         self.lm0040RndpRaw = -1
-        self.lm0040AftmdRaw = -1
         self.lm0040EfmodeRaw = -1
         self.lmVoiceName = ""
         self.voiceName = ""
@@ -79,6 +83,8 @@ def apply_bulk8101(s: State, p: dict) -> None:
     if p["elvlE1Raw"] >= 0:
         s.lmElvlE1Raw = p["elvlE1Raw"]
     s.lmVoiceName = p["name"]
+    if p["elmodeRaw"] == 4 and p.get("efsdlvRaw", -1) >= 0:
+        s.lmEfsdlvRaw = p["efsdlvRaw"]
 
 
 def apply_bulk0040(s: State, p40: dict) -> None:
@@ -95,7 +101,8 @@ def apply_bulk0040(s: State, p40: dict) -> None:
         "AMRNG": "lm0040AmrngRaw",
         "MCTUN": "lm0040MctunRaw",
         "RNDP": "lm0040RndpRaw",
-        "AFTMD": "lm0040AftmdRaw",
+        "EFSDLV_E1": "lm0040EfsdlvE1Raw",
+        "EFSDLV_E2": "lm0040EfsdlvE2Raw",
         "EFMODE": "lm0040EfmodeRaw",
     }
     for k, attr in mapping.items():
@@ -113,6 +120,20 @@ def bulk8101_for_resolve(m: dict, raw: int) -> int:
     if raw < 0 or not m["cf8101"]:
         return -1
     return raw
+
+
+def resolve_efsdlv(s: State, el: int = 0) -> tuple[int, str]:
+    live = s.elementEfsendlvlRaw[el] if 0 <= el < 4 else -1
+    if live >= 0:
+        return live, "live"
+    elmode = s.lmElmodeRaw if s.lmElmodeRaw >= 0 else s.elmodeRaw
+    if el == 0 and elmode == 4 and s.lmEfsdlvRaw >= 0:
+        return s.lmEfsdlvRaw, "8101"
+    if el == 0 and elmode == 8 and s.lm0040EfsdlvE1Raw >= 0:
+        return s.lm0040EfsdlvE1Raw, "0040"
+    if el == 1 and elmode == 8 and s.lm0040EfsdlvE2Raw >= 0:
+        return s.lm0040EfsdlvE2Raw, "0040"
+    return -1, "None"
 
 
 def resolve(s: State, tag: str, el: int = 0) -> tuple[int, str]:
@@ -211,11 +232,18 @@ def main() -> int:
     for tag, attr in (
         ("ATPBR", "lm0040AtpbrRaw"),
         ("PMASN", "lm0040PmasnRaw"),
+        ("MCTUN", "lm0040MctunRaw"),
+    ):
+        setattr(s, attr, 42)
+        got, src = resolve(s, tag)
+        record(f"allow0040/{tag}", got == 42 and src == "0040", tag, "allow0040", got, 42, src)
+
+    s = State()
+    s.hasParsedBulk0040 = True
+    for tag, attr in (
         ("AMASN", "lm0040AmasnRaw"),
         ("AMRNG", "lm0040AmrngRaw"),
-        ("MCTUN", "lm0040MctunRaw"),
         ("RNDP", "lm0040RndpRaw"),
-        ("AFTMD", "lm0040AftmdRaw"),
     ):
         setattr(s, attr, 42)
         got, src = resolve(s, tag)
@@ -241,6 +269,27 @@ def main() -> int:
         apply_bulk0040(s, p40)
         got, src = resolve(s, "EFMODE")
         record(f"bulk/{fid}/EFMODE", got == exp_efmode and src == "0040", "EFMODE", fid, got, exp_efmode, src)
+
+    grndual = FIX / "baseline_ep_grndual.syx"
+    if grndual.is_file():
+        data = grndual.read_bytes()
+        p8101 = parse_lm8101_vc(find_lm8101_frame(data))
+        p40 = parse_lm0040_vc(find_frame(data, "0040VC"))
+        s = State()
+        apply_bulk8101(s, p8101)
+        apply_bulk0040(s, p40)
+        got, src = resolve_efsdlv(s, 0)
+        record("bulk/grndual/EFSDLV_E1", got == 127 and src == "0040", "EFSDLV", "grndual", got, 127, src)
+        got2, src2 = resolve_efsdlv(s, 1)
+        record("bulk/grndual/EFSDLV_E2", got2 == 127 and src2 == "0040", "EFSDLV", "grndual", got2, 127, src2)
+
+        s2 = State()
+        apply_bulk8101(s2, p8101)
+        apply_bulk0040(s2, p40)
+        s2.lmEfsdlvRaw = 106
+        s2.elementEfsendlvlRaw[0] = 127
+        got3, src3 = resolve_efsdlv(s2, 0)
+        record("live/grndual/EFSDLV_E1", got3 == 127 and src3 == "live", "EFSDLV", "grndual-live", got3, 127, src3)
 
     print("=== REGISTRY PATH VERIFICATION ===")
     for key in sorted(results):

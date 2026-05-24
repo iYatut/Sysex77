@@ -52,6 +52,17 @@ export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> 
   const body = await parseJsonResponse(response);
 
   if (!response.ok) {
+    const libraryInitializing =
+      response.status === 503 &&
+      typeof body === 'object' &&
+      body !== null &&
+      'error' in body &&
+      (body as { error: unknown }).error === 'library initializing';
+
+    if (libraryInitializing) {
+      throw new ApiError('library initializing', response.status, body);
+    }
+
     if (isProxyOrOfflineStatus(response.status)) {
       throw new ApiError(API_OFFLINE_HINT, response.status, body);
     }

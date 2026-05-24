@@ -1,0 +1,10 @@
+﻿python :   File "<string>", line 58
+C:\Users\user\AppData\Local\Temp\ps-script-39ca628c-8db8-4629-af52-88f005a3ded1.ps1:75 знак:1
++ python -c "
++ ~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (  File "<string>", line 58:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+    fr=data2:=p2.read_bytes()[s6['offset']:s6['offset']+s6['length']]
+            ^^
+SyntaxError: invalid syntax

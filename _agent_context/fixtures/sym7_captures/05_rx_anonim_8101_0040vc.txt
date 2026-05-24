@@ -1,0 +1,27 @@
+# RX capture — ANONIM patch invoke (SY99 → host)
+# Date: 2026-05-24 (user MIDI-OX paste)
+# Context: patch recall / invoke ANONIM — paired 8101VC + 0040VC response
+
+TIMESTAMP 0008219B  RX 8101VC  (~338 B total, MIDI-OX split 256+86)
+F0 43 00 7A 02 4E 4C 4D 20 20 38 31 30 31 56 43 ...
+  name @+32: ANONIM
+  elmode raw @+32 area: 7F 00 06
+
+TIMESTAMP 000821B6  RX 0040VC  **115 B**  (Δ +0x1B ≈ 27 ms after 8101)
+F0 43 00 7A 00 6B 4C 4D 20 20 30 30 34 30 56 43 00 00
+00 00 00 00 00 00 00 00 00 00 00 00 7F 00 06 02 00 00
+19 00 08 00 0A 02 3F 01 47 00 04 00 37 00 07 00 06 00
+14 64 64 00 00 19 00 08 00 0A 02 3F 01 47 00 04 00 37
+00 07 00 06 00 14 2B 64 64 32 32 00 00 00 63 00 00 00
+63 00 41 00 64 00 00 00 40 0F 7F 09 00 0F 7F 00 00 04
+00 3F 04 00 3F 2E F7
+
+Parsed:
+  frame length = 115
+  LM tag = 0040VC @ byte 10
+  EFSDLV E1 @ byte 100 = 0x7F (127)
+  EFSDLV E2 @ byte 104 = 0x7F (127)
+
+TIMESTAMP 000823C6  RX param9 (live)
+F0 43 10 34 02 00 00 00 00 06 F7
+  → ELMODE = 6 (1 AFM + 1 AWM)

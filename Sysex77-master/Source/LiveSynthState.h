@@ -256,8 +256,9 @@ struct LiveSynthState
         lm0040WllmlRaw = -1;
         lm0040MctunRaw = -1;
         lm0040RndpRaw = -1;
-        lm0040AftmdRaw = -1;
         lm0040SptpntRaw = -1;
+        lm0040EfsdlvE1Raw = -1;
+        lm0040EfsdlvE2Raw = -1;
     }
 
     bool hasAnySyncSource() const noexcept
@@ -332,14 +333,19 @@ struct LiveSynthState
     {
         YamahaLmVoiceDump::Lm8101VcMinimal parsed;
 
-        if (! YamahaLmVoiceDump::parseLm8101VcMinimal (data, dataSize, parsed))
+        if (! YamahaLmVoiceDump::parseLm8101VcMinimal (data, dataSize, parsed,
+                                                      YamahaLmVoiceDump::Lm8101ParseMode::ingest))
         {
             hasParsedBulk8101 = false;
             return false;
         }
 
-        Logger::writeToLog ("[LM8101 ingest] " + YamahaLmVoiceDump::formatLm8101ElnsCoverageLine (parsed)
-                            + " | " + YamahaLmVoiceDump::formatLm8101MixerTailCoverageLine (parsed));
+        if (YamahaLmVoiceDump::lm8101ParserVerboseLoggingEnabled())
+        {
+            Logger::writeToLog ("[LM8101 ingest] " + YamahaLmVoiceDump::formatLm8101ElnsCoverageLine (parsed)
+                                + " | " + YamahaLmVoiceDump::formatLm8101MixerTailCoverageLine (parsed));
+        }
+
         applyLm8101Minimal (parsed);
         return true;
     }
@@ -348,14 +354,19 @@ struct LiveSynthState
     {
         YamahaLmVoiceDump::Lm8101VcMinimal parsed;
 
-        if (! YamahaLmVoiceDump::parseLm8101VcMinimalFromSysexMessages (messages, parsed))
+        if (! YamahaLmVoiceDump::parseLm8101VcMinimalFromSysexMessages (messages, parsed,
+                                                                       YamahaLmVoiceDump::Lm8101ParseMode::ingest))
         {
             hasParsedBulk8101 = false;
             return false;
         }
 
-        Logger::writeToLog ("[LM8101 ingest] " + YamahaLmVoiceDump::formatLm8101ElnsCoverageLine (parsed)
-                            + " | " + YamahaLmVoiceDump::formatLm8101MixerTailCoverageLine (parsed));
+        if (YamahaLmVoiceDump::lm8101ParserVerboseLoggingEnabled())
+        {
+            Logger::writeToLog ("[LM8101 ingest] " + YamahaLmVoiceDump::formatLm8101ElnsCoverageLine (parsed)
+                                + " | " + YamahaLmVoiceDump::formatLm8101MixerTailCoverageLine (parsed));
+        }
+
         applyLm8101Minimal (parsed);
         return true;
     }
@@ -554,8 +565,9 @@ struct LiveSynthState
     int lm0040WllmlRaw = -1;
     int lm0040MctunRaw = -1;
     int lm0040RndpRaw = -1;
-    int lm0040AftmdRaw = -1;
     int lm0040SptpntRaw = -1;
+    int lm0040EfsdlvE1Raw = -1;
+    int lm0040EfsdlvE2Raw = -1;
 
 #if JUCE_DEBUG
     /** Monotonic write-audit sequence (Debug only); incremented in debugLogWriteAuditImpl. */
@@ -708,8 +720,8 @@ struct LiveSynthState
                             + " lm0040MctunRaw=" + formatRawSlot (lm0040MctunRaw)
                             + " liveRndpRaw=" + formatRawSlot (liveRndpRaw)
                             + " lm0040RndpRaw=" + formatRawSlot (lm0040RndpRaw)
-                            + " liveAftmdRaw=" + formatRawSlot (liveAftmdRaw)
-                            + " lm0040AftmdRaw=" + formatRawSlot (lm0040AftmdRaw));
+                            + " lm0040EfsdlvE1Raw=" + formatRawSlot (lm0040EfsdlvE1Raw)
+                            + " lm0040EfsdlvE2Raw=" + formatRawSlot (lm0040EfsdlvE2Raw));
     }
 #endif
 };
@@ -848,45 +860,56 @@ inline bool ingestVoiceSlotIntoLiveSynthState (LiveSynthState& state,
         return false;
     }
 
-    juce::MemoryBlock frame;
-    juce::String failReason;
-
-    if (! extractBankVoiceFrameSlice (bankFile, voiceIndex, offsets, lengths, frame, failReason))
+    if (voiceIndex < 0 || voiceIndex >= offsets.size() || voiceIndex >= lengths.size())
     {
         state.hasParsedBulk8101 = false;
         state.hasParsedBulk0040 = false;
-        return false;
-    }
-
-    if (frame.getSize() < (size_t) YamahaLmVoiceDump::kMin8101VcFrameSize)
-    {
-        state.hasParsedBulk8101 = false;
-        state.hasParsedBulk0040 = false;
-        return false;
-    }
-
-    if (! state.ingestLm8101FromBuffer (frame.getData(), frame.getSize()))
-    {
-        state.hasParsedBulk8101 = false;
         return false;
     }
 
     juce::MemoryBlock bankData;
 
-    if (bankFile.loadFileAsData (bankData))
+    if (! bankFile.loadFileAsData (bankData))
     {
-        const auto* bytes = static_cast<const uint8*> (bankData.getData());
-        const int slotOffset = offsets[voiceIndex];
-        const int slotLength = lengths[voiceIndex];
-        int pairedOff = -1;
-        int pairedLen = 0;
+        state.hasParsedBulk8101 = false;
+        state.hasParsedBulk0040 = false;
+        return false;
+    }
 
-        if (YamahaLmVoiceDump::findPaired0040FrameAfter (bytes, bankData.getSize(),
-                                                          slotOffset + slotLength,
-                                                          pairedOff, pairedLen))
-        {
-            state.ingestLm0040FromBuffer (bytes + (size_t) pairedOff, (size_t) pairedLen);
-        }
+    const int slotOffset = offsets[voiceIndex];
+    const int slotLength = lengths[voiceIndex];
+
+    if (slotOffset < 0 || slotLength <= 0
+        || (size_t) (slotOffset + slotLength) > bankData.getSize())
+    {
+        state.hasParsedBulk8101 = false;
+        state.hasParsedBulk0040 = false;
+        return false;
+    }
+
+    const auto* bytes = static_cast<const uint8*> (bankData.getData());
+
+    if (bytes[slotOffset] != 0xf0 || bytes[slotOffset + slotLength - 1] != 0xf7)
+    {
+        state.hasParsedBulk8101 = false;
+        state.hasParsedBulk0040 = false;
+        return false;
+    }
+
+    if (! state.ingestLm8101FromBuffer (bytes + (size_t) slotOffset, (size_t) slotLength))
+    {
+        state.hasParsedBulk8101 = false;
+        return false;
+    }
+
+    int pairedOff = -1;
+    int pairedLen = 0;
+
+    if (YamahaLmVoiceDump::findPaired0040FrameAfter (bytes, bankData.getSize(),
+                                                      slotOffset + slotLength,
+                                                      pairedOff, pairedLen))
+    {
+        state.ingestLm0040FromBuffer (bytes + (size_t) pairedOff, (size_t) pairedLen);
     }
 
     return true;
@@ -948,8 +971,8 @@ inline bool ingestLm8101FromBankVoiceSlotAndLog (int voiceIndex,
         p0040.wpbrRaw = lm.lm0040WpbrRaw;
         p0040.wllmlRaw = lm.lm0040WllmlRaw;
         p0040.sptpntRaw = lm.lm0040SptpntRaw;
-        p0040.atpbrRaw = lm.lm0040AtpbrRaw;
-        p0040.aftmdRaw = lm.lm0040AftmdRaw;
+        p0040.efsdlvE1Raw = lm.lm0040EfsdlvE1Raw;
+        p0040.efsdlvE2Raw = lm.lm0040EfsdlvE2Raw;
         Logger::writeToLog ("[BankClick] parsed0040: " + YamahaLmVoiceDump::formatLm0040VcMinimalLogLine (p0040));
     }
 
@@ -1121,6 +1144,13 @@ inline void finishLiveVoiceReadFromSy99()
     const bool lm8101Ingested = gLiveSynthState.ingestLm8101FromSysexMessages (gArrayLiveReadSysex);
     const bool lm0040Ingested = gLiveSynthState.ingestLm0040FromSysexMessages (gArrayLiveReadSysex);
 
+    if (lm8101Ingested
+        && YamahaLmVoiceDump::efsendBulk0040TrustedForElmodeRaw (gLiveSynthState.lmElmodeRaw))
+    {
+        gLiveSynthState.elementEfsendlvlRaw[0] = -1;
+        gLiveSynthState.elementEfsendlvlRaw[1] = -1;
+    }
+
     if (lm8101TagInPayload && ! lm8101Ingested)
         Logger::writeToLog ("[SyncFromSY99] LM8101 tag in payload but no full frame found "
                             "— check MIDI driver / SysEx chunking");
@@ -1146,6 +1176,11 @@ inline void finishLiveVoiceReadFromSy99()
 
             if (n == 9 && d != nullptr && d[0] == 0x43 && d[2] == 0x34)
             {
+                // EFSDLV param9 during bulk dump is unreliable for elmode 8; 0040 @100/@104 wins.
+                if (YamahaLmVoiceDump::efsendBulk0040TrustedForElmodeRaw (gLiveSynthState.lmElmodeRaw)
+                    && YamahaLmVoiceDump::isEfsendlvlLiveParam9Frame (d[3], d[4], d[5], d[6]))
+                    continue;
+
                 gLiveSynthState.ingestParameterFrame (d[3], d[4], d[5], d[6], d[7], d[8]);
                 ++param9Replayed;
             }
@@ -1179,6 +1214,8 @@ inline void finishLiveVoiceReadFromSy99()
             p0040.wllmlRaw = gLiveSynthState.lm0040WllmlRaw;
             p0040.sptpntRaw = gLiveSynthState.lm0040SptpntRaw;
             p0040.efmodeRaw = gLiveSynthState.lm0040EfmodeRaw;
+            p0040.efsdlvE1Raw = gLiveSynthState.lm0040EfsdlvE1Raw;
+            p0040.efsdlvE2Raw = gLiveSynthState.lm0040EfsdlvE2Raw;
             Logger::writeToLog ("[SyncFromSY99] ingest0040: "
                                 + YamahaLmVoiceDump::formatLm0040VcMinimalLogLine (p0040));
         }

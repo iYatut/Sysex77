@@ -129,11 +129,11 @@ public:
                 Logger::writeToLog ("Slider rexeive val " + String(val));
                         if (encodeMixerEffectSendSigned7)
                         {
-                            Slider::setValue (uiFromMixerEffectSendSigned7Sysex (val));
+                            Slider::setValue (uiFromMixerEffectSendSigned7Sysex (val), dontSendNotification);
                         }
                         else if (encodeElementNoteShiftSigned)
                         {
-                            Slider::setValue (uiFromElementNoteShiftSysex (val));
+                            Slider::setValue (uiFromElementNoteShiftSysex (val), dontSendNotification);
                         }
                         else if (encodeYamahaSymmetric12ATPBR && boolNegative)
                         {
@@ -147,7 +147,7 @@ public:
                             else
                                 setVal = val;
 
-                            Slider::setValue(setVal);
+                            Slider::setValue (setVal, dontSendNotification);
                         }
                         else
                         {
@@ -162,7 +162,7 @@ public:
                             }
                 Logger::writeToLog ("signed minus  " + String(val));
                         }
-                                Slider::setValue(val);
+                                Slider::setValue (val, dontSendNotification);
                         }
                                 
                             }
@@ -655,7 +655,7 @@ public:
                     if(sysexData[6] ==  val)
                     {
                         val =value.getValue()[5];
-                        setSelectedId(val + 1);
+                        setSelectedId (val + 1, dontSendNotification);
                     }
                 }
             }
