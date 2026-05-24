@@ -1,8 +1,26 @@
 # SYM7 Library Auto-Sync — Agent Progress Board
 
 > **Цель:** зафиксировать MIDI-команды SY Manager (SYM7) для автоматической синхронизации библиотеки и довести Sysex77 до parity.  
-> **Обновлено:** 2026-05-23  
-> **План:** `.cursor/plans/sym7_library_sync_778685a8.plan.md` (не редактировать из агента)
+> **Обновлено:** 2026-05-23 (library nav HW verified)
+
+---
+
+## Library navigation — single source of bank math
+
+**Единственный модуль:** [`Sy99LibraryNavigation.h`](../Sysex77-master/Source/Sy99LibraryNavigation.h)
+
+| Concern | Where | Rule |
+|---------|-------|------|
+| Canonical state | `libraryInboundCommittedState()`, `libraryRecallContext()` | **`(page, mm 0..63)`** per Internal/PRE1/PRE2 |
+| Inbound decode | `sy99InboundVoiceMmFromPc`, `processInboundLibraryProgramChangeOnMidiThread` | Commit **mm on MIDI thread** before UI; linear **1..64** ring (±1 step) |
+| Outbound recall | `libraryOutboundNeedsFullTriple`, `libraryRecallContextAfterSend` | Full CC0+CC32+PC if **page**, **CC32**, or **mm/16** changed |
+| User labels | `libraryVoiceSy99SlotCode(mm)` in `VoicesTableModel.h` | **Derived only** — A1…D16 from `mm/16`, `mm%16`; not used for routing |
+
+**Не дублировать** bank math в `VoicesTableModel.h` / `MidiDemo.h` / `Librairie.h` — только вызовы navigation API.
+
+**Regression gate:** `python _agent_context/fixtures/_test_library_navigation.py` (7/7 PASS).
+
+**Hardware verified (2026-05-23):** A16→B1 (not A1); in-bank wrap OK; PRE1 D4 recall; no echo loop.
 
 ---
 
@@ -11,9 +29,9 @@
 1. **Этот файл** — status + backlog + handoff
 2. [`sy99_bulk_dump_request.md`](sy99_bulk_dump_request.md) — официальный протокол bulk request/response
 3. [`05_missing_audit.md`](05_missing_audit.md) § Library ↔ Voice sync [LIBSYNC]
-4. Код: [`Sy99DumpRequest.h`](../Sysex77-master/Source/Sy99DumpRequest.h), [`Sy99BulkLibraryCapture.h`](../Sysex77-master/Source/Sy99BulkLibraryCapture.h), [`Librairie.h`](../Sysex77-master/Source/Librairie.h), [`LiveSynthState.h`](../Sysex77-master/Source/LiveSynthState.h)
+4. Код: [`Sy99DumpRequest.h`](../Sysex77-master/Source/Sy99DumpRequest.h), [`Sy99BulkLibraryCapture.h`](../Sysex77-master/Source/Sy99BulkLibraryCapture.h), [`Librairie.h`](../Sysex77-master/Source/Librairie.h), [`LiveSynthState.h`](../Sysex77-master/Source/LiveSynthState.h), **[`Sy99LibraryNavigation.h`](../Sysex77-master/Source/Sy99LibraryNavigation.h)** (bank math — единственный источник)
 5. Capture protocol: [`fixtures/sym7_captures/README.md`](fixtures/sym7_captures/README.md)
-6. Validation: [`fixtures/_validate_dump_request.py`](fixtures/_validate_dump_request.py)
+6. Validation: [`fixtures/_validate_dump_request.py`](fixtures/_validate_dump_request.py), [`fixtures/_test_library_navigation.py`](fixtures/_test_library_navigation.py)
 
 **Не путать:** parameter-change `F0 43 1n 34 …` — live edit, не library bulk sync.
 
@@ -48,7 +66,7 @@
 | Effect request | TX | `… 0040MS 00 00 [tail?] F7` | — | — | — | spec ✅ |
 | Device Inquiry | TX | `F0 7E 7F 06 01 F7` | — | — | — | spec ✅ |
 | Library recall (slot click) | TX | CC0, CC32, PC ch1 | — | — | — | Sysex77 ✅ (context: page+CC32+mm/16) |
-| Inbound PC from SY99 | RX | PC ch1 (+ batch CC0/CC32) | — | — | — | Sysex77 ⚠️ pending `_test_library_navigation.py` PASS + HW A16→B1 |
+| Inbound PC from SY99 | RX | PC ch1 (+ batch CC0/CC32) | — | — | — | Sysex77 ✅ test 7/7 + HW 2026-05-23 |
 
 ### Sysex77 programmatic (implemented)
 
@@ -89,7 +107,7 @@
 | Download everything orchestration | ✅ | ✅ menu «Auto-sync full library» | done (HW verify pending) |
 | Patch Viewer mirror on connect | ✅ | ❌ | needs SYM7 capture |
 | Startup edit-buffer sync | ✅? | ✅ opt-in Config | done (default OFF) |
-| Inbound PC → library slot | ✅ | ✅ | **partial** — `Sy99LibraryNavigation.h`; gate: `_test_library_navigation.py` + HW |
+| Inbound PC → library slot | ✅ | ✅ | **done** — `Sy99LibraryNavigation.h`; `_test_library_navigation.py` + HW verified |
 | Full bulk → UI sliders | ✅ | ❌ | out of scope |
 
 ---
@@ -104,7 +122,7 @@
 | B4 | Download-everything orchestrator | `Sy99BulkLibraryCapture.h`, `Librairie.h` | P1 | **done** (HW verify pending) |
 | B5 | Merge 64 AUTOSYNC files → one bank UX | `Librairie.h` | P3 | todo |
 | B6 | `_validate_dump_request.py` AUTOSYNC cases | `fixtures/` | P1 | partial |
-| B7 | Library nav regression gate | `fixtures/_test_library_navigation.py`, `Sy99LibraryNavigation.h` | P0 | **done** (HW verify pending) |
+| B7 | Library nav regression gate | `fixtures/_test_library_navigation.py`, `Sy99LibraryNavigation.h` | P0 | **done** (test + HW verified 2026-05-23) |
 
 ---
 
@@ -127,14 +145,21 @@
 | Check | Command | Result | Date |
 |-------|---------|--------|------|
 | edit/a1/b1 baselines vs REQTEST | `python _agent_context/fixtures/_validate_dump_request.py` | REQTEST captures missing (expected without HW session); AUTOSYNC SKIP | 2026-05-23 |
-| Library nav regression | `python _agent_context/fixtures/_test_library_navigation.py` | **6/6 PASS** (A16→B1, A1→A16, PRE1 full triple) | 2026-05-23 |
+| Library nav regression | `python _agent_context/fixtures/_test_library_navigation.py` | **7/7 PASS** (A16→B1, 1..64 ring, PRE1 full triple) | 2026-05-23 |
+| Library nav hardware | SY99 panel + Librairie UI | **PASS** — A16→B1; in-bank OK; PRE1 D4; no echo loop | 2026-05-23 |
 | SYM7 TX log diff | manual | pending | — |
 
 ---
 
 ## Agent handoff notes
 
-**Last session (2026-05-23):**
+**Last session (2026-05-23, library nav):**
+- Added `Sy99LibraryNavigation.h` — single source for `(page, mm)` inbound/outbound recall
+- Fixed A16→B1 inbound (committed mm on MIDI thread); PRE1/PRE2 recall (page+CC32 context)
+- `_test_library_navigation.py` 7/7 PASS; hardware verified stable (no echo loop)
+- Commit `5a2e3b9` on `main`
+
+**Prior session (2026-05-23):**
 - Created this progress board + capture README
 - Implemented `Sy99DumpRequest.h` MU/SY/MS builders + generic LM0040 builder
 - Implemented auto-sync 64 voices in `Librairie.h` (REQUEST VOICE menu)
