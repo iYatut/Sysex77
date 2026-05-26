@@ -259,6 +259,40 @@ struct LiveSynthState
         lm0040SptpntRaw = -1;
         lm0040EfsdlvE1Raw = -1;
         lm0040EfsdlvE2Raw = -1;
+        lm0040EflnE1Raw = -1;
+        lm0040EflnE2Raw = -1;
+    }
+
+    /** Drop stale LM 0040 before re-parsing a library slot (8101 may reload without paired 0040). */
+    void clearBulk0040ParsedState() noexcept
+    {
+        hasParsedBulk0040 = false;
+        lm0040EfmodeRaw = -1;
+        lm0040WpbrRaw = -1;
+        lm0040AtpbrRaw = -1;
+        lm0040PmasnRaw = -1;
+        lm0040PmrngRaw = -1;
+        lm0040AmasnRaw = -1;
+        lm0040AmrngRaw = -1;
+        lm0040FmasnRaw = -1;
+        lm0040FmrngRaw = -1;
+        lm0040PnlasnRaw = -1;
+        lm0040PnlrngRaw = -1;
+        lm0040CoasnRaw = -1;
+        lm0040CorngRaw = -1;
+        lm0040PnbasnRaw = -1;
+        lm0040PnbrngRaw = -1;
+        lm0040EgbasnRaw = -1;
+        lm0040EgbrngRaw = -1;
+        lm0040WlasnRaw = -1;
+        lm0040WllmlRaw = -1;
+        lm0040MctunRaw = -1;
+        lm0040RndpRaw = -1;
+        lm0040SptpntRaw = -1;
+        lm0040EfsdlvE1Raw = -1;
+        lm0040EfsdlvE2Raw = -1;
+        lm0040EflnE1Raw = -1;
+        lm0040EflnE2Raw = -1;
     }
 
     bool hasAnySyncSource() const noexcept
@@ -401,7 +435,7 @@ struct LiveSynthState
 
     void applyLm8101Minimal (const YamahaLmVoiceDump::Lm8101VcMinimal& parsed) noexcept;
     void applyLm0040Minimal (const YamahaLmVoiceDump::Lm0040VcMinimal& parsed) noexcept;
-    void ingestParameterFrame (uint8 b3, uint8 b4, uint8 b5, uint8 b6, uint8 b7, uint8 b8) noexcept;
+    bool ingestParameterFrame (uint8 b3, uint8 b4, uint8 b5, uint8 b6, uint8 b7, uint8 b8) noexcept;
 
     void noteNonParameterMessage (int payloadBytes) noexcept
     {
@@ -568,6 +602,8 @@ struct LiveSynthState
     int lm0040SptpntRaw = -1;
     int lm0040EfsdlvE1Raw = -1;
     int lm0040EfsdlvE2Raw = -1;
+    int lm0040EflnE1Raw = -1;
+    int lm0040EflnE2Raw = -1;
 
 #if JUCE_DEBUG
     /** Monotonic write-audit sequence (Debug only); incremented in debugLogWriteAuditImpl. */
@@ -846,6 +882,102 @@ inline bool extractBankVoiceFrameSlice (const File& bankFile,
     return true;
 }
 
+/** 0040 for invoke/parse: interleaved in .syx, or AUTOSYNC-0040VC-INT split file (full sync). */
+inline bool sy99Resolve0040FrameForVoiceSlot (const juce::File& bank8101File,
+                                              int voiceIndex,
+                                              const juce::Array<int>& offsets,
+                                              const juce::Array<int>& lengths,
+                                              const juce::MemoryBlock& bank8101Data,
+                                              juce::MemoryBlock& out0040,
+                                              juce::String& failReason) noexcept
+{
+    out0040.reset();
+    failReason.clear();
+
+    if (voiceIndex < 0 || voiceIndex >= offsets.size() || voiceIndex >= lengths.size())
+    {
+        failReason = "voice index out of range";
+        return false;
+    }
+
+    const int slotOffset = offsets[voiceIndex];
+    const int slotLength = lengths[voiceIndex];
+    const auto* bytes = static_cast<const uint8*> (bank8101Data.getData());
+    const size_t bankSize = bank8101Data.getSize();
+
+    int pairedOff = -1;
+    int pairedLen = 0;
+
+    if (YamahaLmVoiceDump::findPaired0040FrameAfter (bytes, bankSize,
+                                                      slotOffset + slotLength,
+                                                      pairedOff, pairedLen))
+    {
+        out0040.append (bytes + (size_t) pairedOff, (size_t) pairedLen);
+        return true;
+    }
+
+    const juce::String base = bank8101File.getFileNameWithoutExtension();
+    juce::File companion;
+
+    if (base.equalsIgnoreCase ("AUTOSYNC-VC-INT"))
+        companion = libraryCapturesDirPath().getChildFile ("AUTOSYNC-0040VC-INT.syx");
+
+    if (companion.existsAsFile())
+    {
+        juce::MemoryBlock tailData;
+
+        if (companion.loadFileAsData (tailData))
+        {
+            const auto* tailBytes = static_cast<const uint8*> (tailData.getData());
+            uint8 slotB28 = 0;
+            uint8 slotMm = (uint8) juce::jlimit (0, 63, voiceIndex);
+
+            if (YamahaLmVoiceDump::readLmSym7SlotAddressFromFrame (bytes + (size_t) slotOffset,
+                                                                  slotLength,
+                                                                  "8101VC",
+                                                                  slotB28,
+                                                                  slotMm))
+            {
+                int tailOff = -1;
+                int tailLen = 0;
+
+                if (YamahaLmVoiceDump::find0040VcFrameBySlotMmInFileData (tailBytes, tailData.getSize(),
+                                                                            slotB28, slotMm,
+                                                                            tailOff, tailLen))
+                {
+                    out0040.append (tailBytes + (size_t) tailOff, (size_t) tailLen);
+                    return true;
+                }
+            }
+
+            int tailOff = -1;
+            int tailLen = 0;
+
+            if (YamahaLmVoiceDump::findNth0040VcFrameInFileData (tailBytes, tailData.getSize(),
+                                                                   voiceIndex, tailOff, tailLen))
+            {
+                out0040.append (tailBytes + (size_t) tailOff, (size_t) tailLen);
+                return true;
+            }
+
+            failReason = "no 0040VC frame mm="
+                         + juce::String::toHexString (slotMm).paddedLeft ('0', 2)
+                         + " in " + companion.getFileName();
+            return false;
+        }
+    }
+
+    if (base.containsIgnoreCase ("VC-P2") || base.containsIgnoreCase ("VC-P3"))
+    {
+        failReason = "PRE capture is 8101-only (no 0040 tails synced yet) mm="
+                     + juce::String::toHexString (voiceIndex).paddedLeft ('0', 2);
+        return false;
+    }
+
+    failReason = "no paired 0040VC after slot " + juce::String (voiceIndex);
+    return false;
+}
+
 /** Parse LM 8101VC + paired 0040VC from library slot into the given state (no synth I/O). */
 inline bool ingestVoiceSlotIntoLiveSynthState (LiveSynthState& state,
                                                int voiceIndex,
@@ -896,20 +1028,23 @@ inline bool ingestVoiceSlotIntoLiveSynthState (LiveSynthState& state,
         return false;
     }
 
+    state.clearBulk0040ParsedState();
+
     if (! state.ingestLm8101FromBuffer (bytes + (size_t) slotOffset, (size_t) slotLength))
     {
         state.hasParsedBulk8101 = false;
         return false;
     }
 
-    int pairedOff = -1;
-    int pairedLen = 0;
+    juce::MemoryBlock frame0040;
+    juce::String resolveErr;
 
-    if (YamahaLmVoiceDump::findPaired0040FrameAfter (bytes, bankData.getSize(),
-                                                      slotOffset + slotLength,
-                                                      pairedOff, pairedLen))
+    if (sy99Resolve0040FrameForVoiceSlot (bankFile, voiceIndex, offsets, lengths,
+                                          bankData, frame0040, resolveErr)
+        && ! frame0040.isEmpty())
     {
-        state.ingestLm0040FromBuffer (bytes + (size_t) pairedOff, (size_t) pairedLen);
+        state.ingestLm0040FromBuffer (static_cast<const uint8*> (frame0040.getData()),
+                                      frame0040.getSize());
     }
 
     return true;
@@ -973,6 +1108,8 @@ inline bool ingestLm8101FromBankVoiceSlotAndLog (int voiceIndex,
         p0040.sptpntRaw = lm.lm0040SptpntRaw;
         p0040.efsdlvE1Raw = lm.lm0040EfsdlvE1Raw;
         p0040.efsdlvE2Raw = lm.lm0040EfsdlvE2Raw;
+        p0040.eflnE1Raw = lm.lm0040EflnE1Raw;
+        p0040.eflnE2Raw = lm.lm0040EflnE2Raw;
         Logger::writeToLog ("[BankClick] parsed0040: " + YamahaLmVoiceDump::formatLm0040VcMinimalLogLine (p0040));
     }
 

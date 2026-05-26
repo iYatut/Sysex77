@@ -104,7 +104,11 @@ cd ui && npm run validate:catalog
 
 ### 8 — Bind UI (крутилки)
 
-По `05_missing_audit.md`: `Voice.h`, `Pan.h`, `MidiSlider` + `valueSysexIn`.
+**Registry params (37 confirmed):** `Voice.h` + **`applyLiveSynthStateToEditor`** — inbound через `LiveSynthState` (R-NEW-5, R-KEEP-11). **Не** добавлять `valueSysexIn` handler для новых registry params.
+
+**Legacy / non-registry:** `Voice.h`, `Pan.h`, `MidiSlider` + `valueSysexIn` — по `05_missing_audit.md`.
+
+Unify inbound paths (registry + legacy → один path) = Sprint 8 gate.
 
 ## bindStatus в Library UI
 

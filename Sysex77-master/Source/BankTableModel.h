@@ -52,6 +52,7 @@ public:
         {
             sy99LibraryStartupState() = Sy99LibraryStartupState::restoring;
             restoreSy99LibrarySessionOnStartup();
+            sy99TryRestoreLibraryFromPersistenceOnce();
             sy99LibraryStartupState() = Sy99LibraryStartupState::ready;
         });
     }

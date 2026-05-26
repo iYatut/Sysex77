@@ -90,6 +90,64 @@ class RecallContext:
         self.__init__()
 
 
+class InboundCommittedState:
+    """Mirrors LibraryInboundCommittedState (Sy99LibraryNavigation.h)."""
+
+    def __init__(self) -> None:
+        self.page = PAGE_INTERNAL
+        self.mm = -1
+
+
+def host_synth_nav_in_sync(
+    page: int,
+    committed: InboundCommittedState,
+    inbound_cc32: int,
+    ctx: RecallContext,
+) -> bool:
+    """Mirrors sy99HostSynthNavInSync — authoritative outbound PC-only policy."""
+    expected_lsb = bank_lsb_for_page(page)
+
+    if committed.mm >= 0:
+        if committed.page != page:
+            return False
+        return bank_lsb_for_page(committed.page) == expected_lsb
+
+    inbound_page = page_from_bank_lsb(inbound_cc32)
+    if inbound_page is not None:
+        if inbound_page != page:
+            return False
+        return inbound_cc32 == expected_lsb
+
+    if inbound_cc32 == 0:
+        return page == PAGE_INTERNAL
+
+    if ctx.page == page and ctx.bank_lsb == expected_lsb:
+        return True
+
+    return False
+
+
+def library_outbound_needs_full_triple(
+    page: int,
+    mm: int,
+    committed: InboundCommittedState,
+    inbound_cc32: int,
+    ctx: RecallContext,
+) -> bool:
+    """Mirrors libraryOutboundNeedsFullTriple (C++ path, not legacy ctx-only)."""
+    _ = mm
+    return not host_synth_nav_in_sync(page, committed, inbound_cc32, ctx)
+
+
+def recall_context_after_page_bank_select(page: int, ctx: RecallContext) -> None:
+    """Mirrors libraryRecallContextAfterPageBankSelect."""
+    ctx.page = page
+    ctx.mm = -1
+    ctx.bank_lsb = bank_lsb_for_page(page)
+    ctx.multi_mode = page == PAGE_MULTI_INT
+    ctx.bank_msb = -2 if ctx.multi_mode else -1
+
+
 def outbound_needs_full_triple(page: int, mm: int, ctx: RecallContext) -> bool:
     if page == PAGE_MULTI_INT:
         return not ctx.multi_mode or ctx.page != page
@@ -243,6 +301,66 @@ def test_b_same_bank_pc_only() -> None:
     assert mm == 28, f"B12→B13: expected mm=28, got {mm} ({slot_code(mm)})"
 
 
+def test_host_nav_in_sync_committed_internal() -> None:
+    committed = InboundCommittedState()
+    committed.page = PAGE_INTERNAL
+    committed.mm = 15
+    ctx = RecallContext()
+    assert host_synth_nav_in_sync(PAGE_INTERNAL, committed, inbound_cc32=-1, ctx=ctx)
+    assert not library_outbound_needs_full_triple(
+        PAGE_INTERNAL, 16, committed, inbound_cc32=-1, ctx=ctx
+    ), "A16→B1: committed internal → PC-only"
+
+
+def test_host_nav_cross_page_needs_triple() -> None:
+    committed = InboundCommittedState()
+    committed.page = PAGE_INTERNAL
+    committed.mm = 0
+    ctx = RecallContext()
+    assert not host_synth_nav_in_sync(PAGE_PRE1, committed, inbound_cc32=-1, ctx=ctx)
+    assert library_outbound_needs_full_triple(
+        PAGE_PRE1, 51, committed, inbound_cc32=-1, ctx=ctx
+    ), "Internal ctx → PRE1 must full triple"
+
+
+def test_host_nav_cc32_latch_internal() -> None:
+    committed = InboundCommittedState()
+    ctx = RecallContext()
+    assert host_synth_nav_in_sync(PAGE_INTERNAL, committed, inbound_cc32=0, ctx=ctx)
+    assert not host_synth_nav_in_sync(PAGE_INTERNAL, committed, inbound_cc32=2, ctx=ctx)
+
+
+def test_host_nav_recall_ctx_fallback() -> None:
+    committed = InboundCommittedState()
+    ctx = RecallContext()
+    recall_context_after_send(PAGE_INTERNAL, mm=27, ctx=ctx)
+    assert host_synth_nav_in_sync(PAGE_INTERNAL, committed, inbound_cc32=99, ctx=ctx)
+
+
+def test_host_nav_after_tab_bank_select_pc_only() -> None:
+    """After tab CC0+CC32 without PC, next slot recall is PC-only when ctx bank matches."""
+    committed = InboundCommittedState()
+    ctx = RecallContext()
+    recall_context_after_page_bank_select(PAGE_INTERNAL, ctx)
+    assert host_synth_nav_in_sync(PAGE_INTERNAL, committed, inbound_cc32=99, ctx=ctx)
+    assert not library_outbound_needs_full_triple(
+        PAGE_INTERNAL, 5, committed, inbound_cc32=99, ctx=ctx
+    )
+
+
+def test_legacy_ctx_policy_differs_from_host_sync() -> None:
+    """Document drift: legacy ctx-only check vs sy99HostSynthNavInSync."""
+    ctx = RecallContext()
+    recall_context_after_send(PAGE_INTERNAL, mm=15, ctx=ctx)
+    committed = InboundCommittedState()
+    assert not outbound_needs_full_triple(PAGE_INTERNAL, mm=16, ctx=ctx)
+    committed.page = PAGE_PRE2
+    committed.mm = 3
+    assert library_outbound_needs_full_triple(
+        PAGE_INTERNAL, 16, committed, inbound_cc32=-1, ctx=ctx
+    ), "Inbound committed PRE2 blocks PC-only on Internal host page"
+
+
 def main() -> int:
     tests = [
         test_a16_forward_to_b1,
@@ -259,6 +377,12 @@ def main() -> int:
         test_b_to_a_via_cc0_latch,
         test_b_to_a_via_cc0_batch,
         test_b_same_bank_pc_only,
+        test_host_nav_in_sync_committed_internal,
+        test_host_nav_cross_page_needs_triple,
+        test_host_nav_cc32_latch_internal,
+        test_host_nav_recall_ctx_fallback,
+        test_host_nav_after_tab_bank_select_pc_only,
+        test_legacy_ctx_policy_differs_from_host_sync,
     ]
     failed = 0
     for t in tests:

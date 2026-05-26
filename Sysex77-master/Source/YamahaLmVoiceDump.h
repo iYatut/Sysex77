@@ -60,7 +60,8 @@ namespace YamahaLmVoiceDump
     constexpr int kLm0040PnlasnOffset = 49;
     constexpr int kLm0040PnlrngOffset = 50;
     constexpr int kLm0040CoasnOffset = 51;
-    constexpr int kLm0040CorngOffset = 52;
+    /** Filter Cutoff Range (NN 0x33) — sequential slot @+44, not @+52 (RNDP). */
+    constexpr int kLm0040CorngOffset = 44;
     constexpr int kLm0040PnbasnOffset = 53;
     constexpr int kLm0040PnbrngOffset = 54;
     constexpr int kLm0040EgbasnOffset = 46;
@@ -68,11 +69,16 @@ namespace YamahaLmVoiceDump
     constexpr int kLm0040WlasnOffset = 56;
     constexpr int kLm0040WllmlOffset = 55;
     constexpr int kLm0040MctunOffset = 90;
+    /** Random Pitch (NN 0x3B) — sequential slot @+52 (fixtures 01–03). */
     constexpr int kLm0040RndpOffset = 52;
     /** EFSDLV El.1 in 0040VC tail (elmode 8 hardware diff; was mis-tagged AFTMD @+100). */
     constexpr int kLm0040EfsdlvE1Offset = 100;
+    /** EFLN1EL wire El.1 in 0040VC — byte before EFSDLV E1 (HW Classic 2026-05-26). */
+    constexpr int kLm0040EflnE1Offset = kLm0040EfsdlvE1Offset - 1;
     /** EFSDLV El.2 in 0040VC tail (elmode 8 hardware diff). */
     constexpr int kLm0040EfsdlvE2Offset = 104;
+    /** EFLN1EL wire El.2 in 0040VC — byte before EFSDLV E2. */
+    constexpr int kLm0040EflnE2Offset = kLm0040EfsdlvE2Offset - 1;
     constexpr int kLm0040SptpntOffset = 98;
     /** Effect mode (live `08 00 00 20`): Off=0 Serial=1 Parallel=2. Confirmed fixtures 06–08 @+33. */
     constexpr int kLm0040EfmodeOffset = 33;
@@ -179,16 +185,78 @@ namespace YamahaLmVoiceDump
         return uiVal;
     }
 
-    inline int efln1ElOffsetFromElvlWol (int elvlOff, int wolOff) noexcept
+    /** EFLN1EL wire bits: Send 1 = 0x01, Send 3 = 0x04 (no Send 2/4 on SY99).
+        Bulk often sets bit 0x02 with Send 3 (0x04) meaning Send 1+3 → 0x05 (EP|76Stage HW). */
+    inline int eflnWireValueMasked (int raw) noexcept
     {
-        if (wolOff == 93)
-            return elvlOff + 37;
-        if (wolOff == 95)
-            return elvlOff + 35;
-        return elvlOff + 36;
+        if (raw < 0)
+            return -1;
+
+        const uint8 b = (uint8) raw;
+        int ui = (int) (b & 0x05);
+
+        if ((b & 0x02) != 0)
+            ui |= 0x01;
+
+        return ui & 0x05;
     }
 
-    /** 8101 @ EFLN1EL + 12 — diagnostic only; matches 0040 @100 on Classic, poison on NiteHwk (76 vs LCD 127). */
+    /** EFLN1EL El.1 in 8101VC mixer strip (HW matrix 2026-05-26).
+        ELVL E1==0 → +35; ELVL E1==127 → best of +39/+26/+35 wire score. */
+    inline int efln1ElRawFromMixerStrip (const uint8* frame, int frameSize,
+                                         int elvlOff, int elvlE1Raw) noexcept
+    {
+        if (frame == nullptr || elvlOff < 0)
+            return -1;
+
+        if (elvlE1Raw == 0)
+        {
+            const int off35 = elvlOff + 35;
+
+            if (off35 >= 0 && off35 < frameSize)
+                return eflnWireValueMasked ((int) frame[off35]);
+
+            return -1;
+        }
+
+        const int offs[] = { elvlOff + 39, elvlOff + 26, elvlOff + 35 };
+        int bestMasked = -1;
+        int bestScore = -1;
+
+        for (int off : offs)
+        {
+            if (off < 0 || off >= frameSize)
+                continue;
+
+            const int masked = eflnWireValueMasked ((int) frame[off]);
+
+            if (masked <= 0)
+                continue;
+
+            const int score = masked == 5 ? 3 : masked == 4 ? 2 : masked == 1 ? 1 : 0;
+
+            if (score > bestScore)
+            {
+                bestScore = score;
+                bestMasked = masked;
+            }
+        }
+
+        if (bestMasked >= 0)
+            return bestMasked;
+
+        const int off39 = elvlOff + 39;
+
+        if (off39 >= 0 && off39 < frameSize)
+            return eflnWireValueMasked ((int) frame[off39]);
+
+        return -1;
+    }
+
+    /** 8101 EFSDLV El.1 fallback @ ELVL E1 + 47 (not efln+12 — offset varies with EFLN layout). */
+    constexpr int kLm8101VcEfsdlvDeltaFromElvl = 47;
+
+    /** Legacy name kept for grndual diagnostic (was tied to wrong EFLN base). */
     constexpr int kLm8101VcEfsdlvDeltaFromEfln = 12;
 
     /** Autosync-only fallback when 0040VC is absent; not authoritative (HW EP:NiteHwk 2026-05-24). */
@@ -237,6 +305,36 @@ namespace YamahaLmVoiceDump
         }
     }
 
+    /** Live param9 `03 NN 00 09` — Effect Send Lines (per element). */
+    inline bool isEflnLiveParam9Frame (uint8 b3, uint8 b4, uint8 b5, uint8 b6) noexcept
+    {
+        if (b3 != 0x03 || b5 != 0x00 || b6 != 0x09)
+            return false;
+
+        switch (b4)
+        {
+            case 0x00:
+            case 0x20:
+            case 0x40:
+            case 0x60:
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    inline int elementIndexFromMixerLiveParam9B4 (uint8 b4) noexcept
+    {
+        switch (b4)
+        {
+            case 0x00: return 0;
+            case 0x20: return 1;
+            case 0x40: return 2;
+            case 0x60: return 3;
+            default:   return -1;
+        }
+    }
+
     inline bool eldtE1UsesOutselStrip (int elmodeRaw) noexcept
     {
         switch (elmodeRaw)
@@ -276,15 +374,6 @@ namespace YamahaLmVoiceDump
             return -1;
 
         return (int) ((uint8) raw & 0x06);
-    }
-
-    /** EFLN1EL wire bits: Send 1 = 0x01, Send 3 = 0x04 (no Send 2/4 on SY99). */
-    inline int eflnWireValueMasked (int raw) noexcept
-    {
-        if (raw < 0)
-            return -1;
-
-        return (int) ((uint8) raw & 0x05);
     }
 
     /** Send 3 only valid in EFMODE Parallel (0x02). */
@@ -462,6 +551,8 @@ namespace YamahaLmVoiceDump
         int efmodeRaw = -1;
         int efsdlvE1Raw = -1;
         int efsdlvE2Raw = -1;
+        int eflnE1Raw = -1;
+        int eflnE2Raw = -1;
     };
 
     inline bool tagsEqual6 (const uint8* at, const char* tag6) noexcept
@@ -590,6 +681,55 @@ namespace YamahaLmVoiceDump
         return {};
     }
 
+    /** Prefer the largest full 0040VC frame (SYM7 RX ~115 B); ignore short echoes / partial tails. */
+    inline LmBlockView findBestLm0040VcBlockInSysexMessages (
+        const juce::Array<juce::MidiMessage>& messages) noexcept
+    {
+        LmBlockView best;
+        juce::MemoryBlock wrapped;
+
+        for (const auto& m : messages)
+        {
+            if (! m.isSysEx())
+                continue;
+
+            const uint8* raw = m.getRawData();
+            const int rawN = m.getRawDataSize();
+
+            auto consider = [&best] (const uint8* data, size_t size) noexcept
+            {
+                if (data == nullptr || size < (size_t) kMin0040VcFrameSize)
+                    return;
+
+                const auto block = findLmBlock (data, size, "0040VC");
+
+                if (block.data != nullptr && block.size > best.size)
+                    best = block;
+            };
+
+            if (raw != nullptr && rawN > 0)
+            {
+                if (raw[0] == 0xf0)
+                    consider (raw, (size_t) rawN);
+                else if (raw[0] == 0x43 && appendWrappedSysexBody (wrapped, raw, rawN))
+                    consider (static_cast<const uint8*> (wrapped.getData()), wrapped.getSize());
+            }
+
+            const uint8* d = m.getSysExData();
+            const int n = m.getSysExDataSize();
+
+            if (d == nullptr || n <= 0)
+                continue;
+
+            if (d[0] == 0xf0)
+                consider (d, (size_t) n);
+            else if (d[0] == 0x43 && appendWrappedSysexBody (wrapped, d, n))
+                consider (static_cast<const uint8*> (wrapped.getData()), wrapped.getSize());
+        }
+
+        return best;
+    }
+
     /** Concatenate LiveRead SysEx bytes (same layout as saveLiveReadCaptureToSyx .syx). */
     inline juce::MemoryBlock concatLiveReadSysexRaw (
         const juce::Array<juce::MidiMessage>& messages) noexcept
@@ -636,6 +776,154 @@ namespace YamahaLmVoiceDump
     inline bool frameContainsLmTag (const uint8* frame, int frameSize, const char* tag6) noexcept
     {
         return findLmBlock (frame, (size_t) frameSize, tag6).data != nullptr;
+    }
+
+    /** N-th SysEx frame containing LM tag (0-based), e.g. mm index in AUTOSYNC-0040VC-INT. */
+    inline bool findNthLmTagFrameInFileData (const uint8* fileData, size_t fileSize,
+                                             const char* tag6, int frameIndex,
+                                             int& outOffset, int& outLength) noexcept
+    {
+        outOffset = -1;
+        outLength = 0;
+
+        if (fileData == nullptr || fileSize < 16 || frameIndex < 0 || tag6 == nullptr)
+            return false;
+
+        int count = 0;
+
+        for (size_t i = 0; i < fileSize;)
+        {
+            if (fileData[i] != 0xf0)
+            {
+                ++i;
+                continue;
+            }
+
+            size_t j = i + 1;
+
+            while (j < fileSize && fileData[j] != 0xf7)
+                ++j;
+
+            if (j >= fileSize)
+                break;
+
+            const int frameLen = (int) (j - i + 1);
+
+            if (frameContainsLmTag (fileData + i, frameLen, tag6))
+            {
+                if (count == frameIndex)
+                {
+                    outOffset = (int) i;
+                    outLength = frameLen;
+                    return true;
+                }
+
+                ++count;
+            }
+
+            i = j + 1;
+        }
+
+        return false;
+    }
+
+    inline bool findNth0040VcFrameInFileData (const uint8* fileData, size_t fileSize,
+                                              int frameIndex,
+                                              int& outOffset, int& outLength) noexcept
+    {
+        return findNthLmTagFrameInFileData (fileData, fileSize, "0040VC", frameIndex,
+                                            outOffset, outLength);
+    }
+
+    /** Read SYM7 slot address (byte28, mm) from an LM frame body. */
+    inline bool readLmSym7SlotAddressFromFrame (const uint8* frame, int frameSize, const char* tag6,
+                                                uint8& byte28Out, uint8& mmOut) noexcept
+    {
+        byte28Out = 0;
+        mmOut = 0;
+
+        if (frame == nullptr || tag6 == nullptr || frameSize < 26)
+            return false;
+
+        for (int i = 0; i <= frameSize - 26; ++i)
+        {
+            if (frame[i] != 'L' || frame[i + 1] != 'M')
+                continue;
+
+            if (! tagsEqual6 (frame + i + kLmTagOffsetFromLm, tag6))
+                continue;
+
+            const int addr = i + 24;
+
+            if (addr + 1 >= frameSize)
+                return false;
+
+            byte28Out = frame[addr];
+            mmOut = frame[addr + 1];
+            return true;
+        }
+
+        return false;
+    }
+
+    /** Companion AUTOSYNC-0040VC-INT: match by slot mm (not nth frame — sync may contain duplicates). */
+    inline bool find0040VcFrameBySlotMmInFileData (const uint8* fileData, size_t fileSize,
+                                                   uint8 byte28, uint8 mm,
+                                                   int& outOffset, int& outLength) noexcept
+    {
+        outOffset = -1;
+        outLength = 0;
+
+        if (fileData == nullptr || fileSize < 16)
+            return false;
+
+        int bestScore = -1;
+
+        for (size_t i = 0; i < fileSize;)
+        {
+            if (fileData[i] != 0xf0)
+            {
+                ++i;
+                continue;
+            }
+
+            size_t j = i + 1;
+
+            while (j < fileSize && fileData[j] != 0xf7)
+                ++j;
+
+            if (j >= fileSize)
+                break;
+
+            const int frameLen = (int) (j - i + 1);
+            uint8 frameB28 = 0;
+            uint8 frameMm = 0;
+
+            if (readLmSym7SlotAddressFromFrame (fileData + i, frameLen, "0040VC",
+                                                frameB28, frameMm)
+                && frameB28 == byte28
+                && frameMm == mm
+                && frameLen >= kMin0040VcFrameSize)
+            {
+                int score = 1000;
+
+                if (frameLen <= 130)
+                    score += 500;
+
+                score -= frameLen;
+
+                if (score > bestScore)
+                {
+                    bestScore = score;
+                    outOffset = (int) i;
+                    outLength = frameLen;
+                }
+            }
+
+            i = j + 1;
+        }
+
+        return bestScore >= 0;
     }
 
     /** SY99 voice dumps pair 8101VC with a following 0040VC frame in the same .syx. */
@@ -898,15 +1186,14 @@ namespace YamahaLmVoiceDump
 
         if (out.elvlE1Offset >= 0 && out.wolOffset >= 0)
         {
-            const int eflnOff = efln1ElOffsetFromElvlWol (out.elvlE1Offset, out.wolOffset);
+            out.lmEfln1ElRaw = efln1ElRawFromMixerStrip (frame, frameSize,
+                                                          out.elvlE1Offset, out.elvlE1Raw);
 
-            if (eflnOff >= 0 && eflnOff < frameSize)
-                out.lmEfln1ElRaw = eflnWireValueMasked ((int) frame[eflnOff]);
+            const int efsdlvOff = out.elvlE1Offset + kLm8101VcEfsdlvDeltaFromElvl;
 
             if (efsendBulk8101TrustedForElmodeRaw (out.elmodeRaw)
-                && eflnOff >= 0
-                && eflnOff + kLm8101VcEfsdlvDeltaFromEfln < frameSize)
-                out.lmEfsdlvRaw = (int) frame[eflnOff + kLm8101VcEfsdlvDeltaFromEfln];
+                && efsdlvOff >= 0 && efsdlvOff < frameSize)
+                out.lmEfsdlvRaw = (int) frame[efsdlvOff];
 
             /* EFSDVSNS / EFSDSCL: not located in 8101VC bulk (live param9 only). */
         }
@@ -1001,6 +1288,18 @@ namespace YamahaLmVoiceDump
         readByteIfInRange (frame, frameSize, kLm0040SptpntOffset, out.sptpntRaw);
         readByteIfInRange (frame, frameSize, kLm0040EfmodeOffset, out.efmodeRaw);
 
+        int eflnWire = -1;
+        readByteIfInRange (frame, frameSize, kLm0040EflnE1Offset, eflnWire);
+
+        if (eflnWire >= 0)
+            out.eflnE1Raw = eflnWireValueMasked (eflnWire);
+
+        eflnWire = -1;
+        readByteIfInRange (frame, frameSize, kLm0040EflnE2Offset, eflnWire);
+
+        if (eflnWire >= 0)
+            out.eflnE2Raw = eflnWireValueMasked (eflnWire);
+
         return true;
     }
 
@@ -1013,6 +1312,13 @@ namespace YamahaLmVoiceDump
     inline bool parseLm0040VcMinimalFromSysexMessages (const juce::Array<juce::MidiMessage>& messages,
                                                        Lm0040VcMinimal& out) noexcept
     {
+        {
+            const auto block = findBestLm0040VcBlockInSysexMessages (messages);
+
+            if (block.data != nullptr && parseLm0040VcMinimal (block.data, block.size, out))
+                return true;
+        }
+
         {
             const auto block = findLmBlockInSysexMessages (messages, "0040VC");
 
@@ -1517,6 +1823,12 @@ namespace YamahaLmVoiceDump
 
         if (p.efsdlvE2Raw >= 0)
             s << " EFSDLV_E2=" << p.efsdlvE2Raw;
+
+        if (p.eflnE1Raw >= 0)
+            s << " EFLN_E1=" << p.eflnE1Raw;
+
+        if (p.eflnE2Raw >= 0)
+            s << " EFLN_E2=" << p.eflnE2Raw;
 
         return s;
     }

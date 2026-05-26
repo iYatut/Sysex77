@@ -31,6 +31,9 @@
 #include "Sy99LibrarySyncEngine.h"
 #include "Sy99DumpRequest.h"
 #include "Sy99Lazy0040Fetch.h"
+#include "Sy99InvokeBulkLoad.h"
+#include "Sy99LibrarySession.h"
+#include "Sy99LibraryApi.h"
 #include "DeviceModel.h"
 #include "MidiStreamLogger.h"
 #include "Sy99Ui.h"
@@ -173,28 +176,34 @@ struct LibrairiePage   : public Component, public Button::Listener, private Asyn
 
         librarySynthPanelNavigateCallback() = [this] (Sy99LibraryContentPage page, int mm)
         {
-            if (libraryContentPage() != page)
-                switchLibraryContentPage (page);
-
-            libraryVoiceSuppressProgramChangeSend() = true;
-
-            if (sy99ShouldUseSy99SlotEditor())
+            auto proceed = [this, page, mm]
             {
-                selectLibrarySlotWithEditor (page, mm);
+                if (libraryContentPage() != page)
+                    switchLibraryContentPage (page);
+
+                libraryVoiceSuppressProgramChangeSend() = true;
+
+                if (sy99ShouldUseSy99SlotEditor())
+                    selectLibrarySlotWithEditor (page, mm);
+                else if (libraryPageIsMulti (page))
+                    selectLibraryPageSlotExclusive (0, mm);
+                else
+                {
+                    const int bankIdx = mm / 16;
+                    const int rowInBank = mm % 16;
+                    selectLibraryPageSlotExclusive (bankIdx, rowInBank);
+                }
+
                 libraryVoiceSuppressProgramChangeSend() = false;
+            };
+
+            if (libraryVoiceSuppressProgramChangeSend())
+            {
+                proceed();
                 return;
             }
 
-            if (libraryPageIsMulti (page))
-                selectLibraryPageSlotExclusive (0, mm);
-            else
-            {
-                const int bankIdx = mm / 16;
-                const int rowInBank = mm % 16;
-                selectLibraryPageSlotExclusive (bankIdx, rowInBank);
-            }
-
-            libraryVoiceSuppressProgramChangeSend() = false;
+            tryLeaveEditorContext (proceed, mm);
         };
 
         libraryVoiceOpenedCallback() = [this] (int globalIdx, const String& voiceName)
@@ -204,9 +213,50 @@ struct LibrairiePage   : public Component, public Button::Listener, private Asyn
                                    dontSendNotification);
         };
 
+        sy99InvokeBulkLoadActiveCallback() = []
+        {
+            return sy99InvokeBulkLoadPlayer().active();
+        };
+
         sy99BankClick0040FetchCallback() = [this] (int globalMm, uint8 memoryType)
         {
             beginBankClick0040Fetch (globalMm, memoryType);
+        };
+
+        sy99BankClickEditBufferRndpFetchCallback() = [this]
+        {
+            beginBankClickEditBufferRndpFetch();
+        };
+
+        sy99BankClick0040CompleteCallback() = [this]
+        {
+            if (! sy99BankClick0040CaptureActive())
+                return;
+
+            if (arraySysex.isEmpty())
+                arraySysex.addArray (sy99BankClick0040RxBuffer());
+
+            if (sy99BankClickRndpFetchPhase() == Sy99BankClickRndpFetchPhase::editBuffer)
+                finishBankClickEditBufferRndpFetchFromBuffer();
+            else
+                finishBankClick0040FetchFromBuffer();
+
+            endBulkCaptureSession (true);
+            sy99BankClick0040RxBuffer().clearQuick();
+        };
+
+        sy99BankClick0040AbortCallback() = [this]
+        {
+            if (! requestSysex && ! sy99BankClick0040CaptureActive())
+                return;
+
+            const bool bankClickReq = bulkCaptureDumpRequestCaseTag.startsWith ("bankclick");
+
+            if (! bankClickReq && ! sy99BankClick0040CaptureActive())
+                return;
+
+            sy99BankClick0040RxBuffer().clearQuick();
+            endBulkCaptureSession (false);
         };
 
         sy99AnyLibrarySyncActiveCallback() = []
@@ -219,7 +269,7 @@ struct LibrairiePage   : public Component, public Button::Listener, private Asyn
         syncHost.preparePhaseOnUi = [this] (int phaseIndex)
         {
             prepareLibrarySyncPhase (sy99FullLibrarySyncPhaseAt (phaseIndex));
-            relayoutSyncVoiceListsLight();
+            syncUiDisplayedPhaseIndex = phaseIndex;
             triggerAsyncUpdate();
         };
         syncHost.finishFullSyncOnUi = [this] { finishFullLibrarySyncOnUi(); };
@@ -497,10 +547,18 @@ struct LibrairiePage   : public Component, public Button::Listener, private Asyn
 
         const int phaseIndex = sy99FullLibrarySyncSession().phaseIndex;
 
-        if (phaseIndex == syncUiDisplayedPhaseIndex)
+        if (phaseIndex < 0 || phaseIndex >= sy99FullLibrarySyncPhaseCount())
             return;
 
-        prepareLibrarySyncPhase (sy99FullLibrarySyncPhaseAt (phaseIndex));
+        const auto& phase = sy99FullLibrarySyncPhaseAt (phaseIndex);
+        const bool pageMismatch = phase.switchesLibraryPage
+                                  && libraryContentPage()
+                                         != libraryContentPageFromId (phase.libraryPage);
+
+        if (phaseIndex == syncUiDisplayedPhaseIndex && ! pageMismatch)
+            return;
+
+        prepareLibrarySyncPhase (phase);
         syncUiDisplayedPhaseIndex = phaseIndex;
     }
 
@@ -661,10 +719,21 @@ struct LibrairiePage   : public Component, public Button::Listener, private Asyn
 
             if (phase.updatesVoicePreview)
                 beginLibraryPagePreview (page, phase.mmCount);
+
+            if (sy99AnyLibrarySyncActive())
+            {
+                juce::Logger::writeToLog ("[FullLibrarySync] UI page "
+                                          + sy99FullLibrarySyncPhaseUserLabel (
+                                              sy99FullLibrarySyncSession().phaseIndex)
+                                          + " (id="
+                                          + juce::String (phase.libraryPage)
+                                          + ")");
+            }
         }
 
         if (sy99AnyLibrarySyncActive())
         {
+            refreshAutoSyncVoiceLists();
             relayoutSyncVoiceListsLight();
             repaintSyncColumnHeaders();
             resized();
@@ -829,7 +898,9 @@ struct LibrairiePage   : public Component, public Button::Listener, private Asyn
         savedCopy.addArray (s.savedFiles);
 
         endFullLibrarySyncSession (true);
+        Sy99LibraryApi::invalidateVoiceDetailCache();
         sy99InvalidateSy99LibrarySessionCaches();
+        sy99DrainPendingBankClickInvokeLoad();
         sy99DrainPendingBankClick0040Fetch();
 
         if (bankList.activateSy99LibrarySession())
@@ -838,6 +909,7 @@ struct LibrairiePage   : public Component, public Button::Listener, private Asyn
             refreshAutoSyncVoiceLists();
             switchLibraryContentPage (Sy99LibraryContentPage::internalVoices);
             libraryVoiceSuppressAutoSlotOpen() = true;
+            libraryForceNextRecallFullTriple() = true;
             sy99RestoreLibrarySlotFromPersistence();
             libraryVoiceSuppressAutoSlotOpen() = false;
         }
@@ -871,6 +943,7 @@ struct LibrairiePage   : public Component, public Button::Listener, private Asyn
             ++bulkSessionSaveCount;
             endAutoSync64Session (true);
             sy99InvalidateSy99LibrarySessionCaches();
+            sy99DrainPendingBankClickInvokeLoad();
             sy99DrainPendingBankClick0040Fetch();
 
             if (bankList.activateSy99LibrarySession())
@@ -878,6 +951,7 @@ struct LibrairiePage   : public Component, public Button::Listener, private Asyn
                 refreshAutoSyncVoiceLists();
                 switchLibraryContentPage (Sy99LibraryContentPage::internalVoices);
                 libraryVoiceSuppressAutoSlotOpen() = true;
+                libraryForceNextRecallFullTriple() = true;
                 sy99RestoreLibrarySlotFromPersistence();
                 libraryVoiceSuppressAutoSlotOpen() = false;
             }
@@ -942,7 +1016,7 @@ struct LibrairiePage   : public Component, public Button::Listener, private Asyn
         }
 
         const int threshold = bulkCaptureBankClick0040IngestOnly
-                                  ? 12
+                                  ? bulkCaptureBankClick0040IdleThresholdTicks (arraySysex.size())
                                   : bulkCaptureIdleThresholdTicks (arraySysex.size());
 
         if (timeOut <= threshold)
@@ -980,7 +1054,11 @@ struct LibrairiePage   : public Component, public Button::Listener, private Asyn
 
         if (bulkCaptureBankClick0040IngestOnly)
         {
-            finishBankClick0040FetchFromBuffer();
+            if (sy99BankClickRndpFetchPhase() == Sy99BankClickRndpFetchPhase::editBuffer)
+                finishBankClickEditBufferRndpFetchFromBuffer();
+            else
+                finishBankClick0040FetchFromBuffer();
+
             endBulkCaptureSession (true);
             return;
         }
@@ -1062,6 +1140,7 @@ struct LibrairiePage   : public Component, public Button::Listener, private Asyn
 
         sy99BankClick0040CaptureActive() = false;
         bulkCaptureBankClick0040IngestOnly = false;
+        sy99BankClick0040RxBuffer().clearQuick();
 
         stopTimer();
         requestSysex = false;
@@ -1081,9 +1160,14 @@ struct LibrairiePage   : public Component, public Button::Listener, private Asyn
                                    + " file(s) in library",
                                    dontSendNotification);
         }
-        else if (wasDumpRequest && bulkSessionSaveCount == 0)
+        else if (wasDumpRequest && bulkSessionSaveCount == 0 && ! hadData)
         {
             labelInfoLine.setText (Sy99Ui::dumpRequestNoReply (dumpCaseTag, dumpRetried),
+                                   dontSendNotification);
+        }
+        else if (hadData && dumpCaseTag == "bankclick-0040")
+        {
+            labelInfoLine.setText ("BankClick 0040 OK - mixer updated from SY99",
                                    dontSendNotification);
         }
         else if (! hadData && bulkSessionSaveCount == 0)
@@ -1147,11 +1231,79 @@ struct LibrairiePage   : public Component, public Button::Listener, private Asyn
                                dontSendNotification);
     }
 
+    bool beginBankClickInvokeLoad (int globalMm, uint8 memoryType) noexcept
+    {
+        if (sy99InvokeBulkLoadPlayer().active())
+            sy99InvokeBulkLoadPlayer().cancel();
+
+        if (requestSysex || sy99AnyLibrarySyncActive())
+        {
+            sy99DeferBankClickInvokeLoad (globalMm, memoryType);
+            return false;
+        }
+
+        if (auto& portStatus = sy99MidiPortStatusCallback(); portStatus != nullptr)
+        {
+            if (portStatus().isNotEmpty())
+            {
+                Logger::writeToLog ("[BankClick] invoke blocked: " + portStatus());
+                return false;
+            }
+        }
+
+        if (sy99LibrarySession().active && sy99IsSy99LibrarySessionBankLabel (bankSelected))
+        {
+            const auto page = libraryContentPage();
+            auto* index = sy99EnsureVoiceCaptureIndex (page);
+            const File capture = sy99CaptureFileForLibraryPage (page);
+
+            if (index == nullptr)
+            {
+                Logger::writeToLog ("[BankClick] invoke failed: library index missing");
+                return false;
+            }
+
+            if (sy99BeginInvokeBulkLoadFromVoiceSlot (capture,
+                                                      globalMm,
+                                                      index->offsets,
+                                                      index->lengths))
+                return true;
+
+            Logger::writeToLog ("[BankClick] invoke failed slot mm="
+                                + String::toHexString (globalMm).paddedLeft ('0', 2));
+            return false;
+        }
+
+        if (bankSelected.isEmpty())
+        {
+            Logger::writeToLog ("[BankClick] invoke failed: no bank selected");
+            return false;
+        }
+
+        const File bankFile = appDirPath.getChildFile (bankSelected);
+
+        if (sy99BeginInvokeBulkLoadFromVoiceSlot (bankFile,
+                                                  globalMm,
+                                                  voiceSysexFileOffsets,
+                                                  voiceSysexFileLengths))
+            return true;
+
+        Logger::writeToLog ("[BankClick] invoke failed slot mm="
+                            + String::toHexString (globalMm).paddedLeft ('0', 2));
+        return false;
+    }
+
     void beginBankClick0040Fetch (int globalMm, uint8 memoryType) noexcept
     {
         if (sy99BankClick0040CaptureActive())
         {
             Logger::writeToLog ("[BankClick] fetch0040 blocked: capture already active");
+            return;
+        }
+
+        if (sy99InvokeBulkLoadIsActiveForBankClick())
+        {
+            Logger::writeToLog ("[BankClick] fetch0040 blocked: invoke active");
             return;
         }
 
@@ -1166,6 +1318,7 @@ struct LibrairiePage   : public Component, public Button::Listener, private Asyn
             if (portStatus().isNotEmpty())
             {
                 Logger::writeToLog ("[BankClick] fetch0040 blocked: " + portStatus());
+                sy99DeferBankClick0040Fetch (globalMm, memoryType);
                 return;
             }
         }
@@ -1181,7 +1334,18 @@ struct LibrairiePage   : public Component, public Button::Listener, private Asyn
         bulkCaptureDumpRequestMm = (uint8) juce::jlimit (0, 63, globalMm);
         bulkCaptureDumpRequestTailVariant = sy99DumpRequestTailMtMmChecksum;
         bulkCaptureDumpRequestRetried = false;
-        sy99BankClick0040CaptureActive() = true;
+        getLiveSynthState().clearBulk0040ParsedState();
+
+        if (! sy99BankClick0040CaptureActive())
+        {
+            sy99BankClick0040CaptureActive() = true;
+            sy99BankClick0040RxBuffer().clearQuick();
+        }
+        else
+        {
+            juce::Logger::writeToLog ("[BankClick] fetch0040 append to recall capture msgs="
+                                      + juce::String (sy99BankClick0040RxBuffer().size()));
+        }
 
         beginBulkCapture (Sy99BulkCaptureKind::voiceSingle,
                           Sy99BulkCaptureSessionMode::singleAutoClose);
@@ -1198,15 +1362,88 @@ struct LibrairiePage   : public Component, public Button::Listener, private Asyn
         sy99BankClick0040CaptureActive() = false;
         bulkCaptureBankClick0040IngestOnly = false;
 
+        if (arraySysex.isEmpty() && ! sy99BankClick0040RxBuffer().isEmpty())
+            arraySysex.addArray (sy99BankClick0040RxBuffer());
+
         if (arraySysex.isEmpty())
         {
             Logger::writeToLog ("[BankClick] fetch0040: empty RX");
             arraySysex.clear();
+            sy99BankClick0040RxBuffer().clearQuick();
             return;
         }
 
         finishBankClick0040IngestFromMessages (arraySysex);
         arraySysex.clear();
+        sy99BankClick0040RxBuffer().clearQuick();
+    }
+
+    void beginBankClickEditBufferRndpFetch() noexcept
+    {
+        if (sy99BankClick0040CaptureActive())
+        {
+            Logger::writeToLog ("[BankClick] edit-buffer RNDP blocked: capture already active");
+            return;
+        }
+
+        if (sy99InvokeBulkLoadIsActiveForBankClick())
+        {
+            Logger::writeToLog ("[BankClick] edit-buffer blocked: invoke active");
+            return;
+        }
+
+        if (requestSysex || sy99AnyLibrarySyncActive())
+            return;
+
+        if (auto& portStatus = sy99MidiPortStatusCallback(); portStatus != nullptr)
+        {
+            if (portStatus().isNotEmpty())
+            {
+                Logger::writeToLog ("[BankClick] edit-buffer RNDP blocked: " + portStatus());
+                return;
+            }
+        }
+
+        bulkCaptureBankClick0040IngestOnly = true;
+        bulkCapturePendingDumpRequest = true;
+        bulkCaptureSym78101Request = true;
+        bulkCaptureSym78101LmType = "0040VC";
+        bulkCaptureSym78101Byte28 = 0x7F;
+        bulkCaptureDumpRequestCaseTag = "bankclick-edit-rndp";
+        bulkCaptureDumpRequestMt = 0x7F;
+        bulkCaptureDumpRequestMm = 0x00;
+        bulkCaptureDumpRequestTailVariant = sy99DumpRequestTailMtMmChecksum;
+        bulkCaptureDumpRequestRetried = false;
+        sy99BankClick0040CaptureActive() = true;
+        sy99BankClick0040RxBuffer().clearQuick();
+
+        beginBulkCapture (Sy99BulkCaptureKind::voiceSingle,
+                          Sy99BulkCaptureSessionMode::singleAutoClose);
+        sendPendingDumpRequest();
+
+        Logger::writeToLog ("[BankClick] edit-buffer RNDP TX 0040VC b28=7F mm=00");
+    }
+
+    void finishBankClickEditBufferRndpFetchFromBuffer() noexcept
+    {
+        sy99BankClick0040CaptureActive() = false;
+        bulkCaptureBankClick0040IngestOnly = false;
+
+        if (arraySysex.isEmpty() && ! sy99BankClick0040RxBuffer().isEmpty())
+            arraySysex.addArray (sy99BankClick0040RxBuffer());
+
+        if (arraySysex.isEmpty())
+        {
+            Logger::writeToLog ("[BankClick] edit-buffer RNDP: empty RX");
+            sy99BankClickRndpFetchPhase() = Sy99BankClickRndpFetchPhase::none;
+            arraySysex.clear();
+            sy99BankClick0040RxBuffer().clearQuick();
+            return;
+        }
+
+        finishBankClickEditBufferRndpFromMessages (arraySysex);
+        arraySysex.clear();
+        sy99BankClick0040RxBuffer().clearQuick();
     }
 
     void beginBulkCaptureWithDumpRequest (const String& caseTag,
@@ -1325,6 +1562,10 @@ struct LibrairiePage   : public Component, public Button::Listener, private Asyn
 
         sy99AutoSync64Reset();
         sy99FullLibrarySyncReset();
+        sy99ClearPendingBankClick0040();
+        sy99ClearPendingHwRefreshAfterRecall();
+        sy99AbortActiveBankClick0040CaptureIfAny();
+        ++sy99BankClick0040FetchGeneration();
         sy99FullLibrarySyncSession().active = true;
         sy99FullLibrarySyncSession().includeExtendedPhases = includeExtendedPhases;
         suppressEditorExitPrompt() = true;
@@ -1342,7 +1583,7 @@ struct LibrairiePage   : public Component, public Button::Listener, private Asyn
         Sy99MidiTransport::instance().clearReceiveBuffer();
         arraySysex.clear();
         newMessage = false;
-        requestSysex = true;
+        requestSysex = false;
         timeOut = 0;
 
         btReceive.setEnabled (false);
@@ -1389,6 +1630,8 @@ struct LibrairiePage   : public Component, public Button::Listener, private Asyn
         {
             ++bulkSessionSaveCount;
             s.savedFiles.add (saved);
+            Sy99LibraryApi::invalidateVoiceDetailCache();
+            sy99RefreshSy99LibrarySessionFromDisk();
             Logger::writeToLog ("[FullLibrarySync] Saved phase " + String (s.phaseIndex)
                                 + " " + saved.getFullPathName());
         }
@@ -1402,6 +1645,8 @@ struct LibrairiePage   : public Component, public Button::Listener, private Asyn
         menu.addItem (11, "Test request: A1 internal (8101VC mm=00)");
         menu.addItem (12, "Test request: B1 internal (8101VC mm=10)");
         menu.addItem (13, "Test request: A6 0040 tail (0040VC mm=05 — SYM7 BankClick)");
+        menu.addItem (14, "Test invoke LOAD: selected slot (8101+0040 TX bulk)");
+        menu.addItem (15, "Test invoke LOAD: baseline ANONIM.syx");
         menu.addSeparator();
         menu.addItem (30, "Auto-sync 64 internal voices (SYM7-style)");
         menu.addItem (31, "Auto-sync library — Voice+Preset+Multi (~2 min, SYM7)");
@@ -1420,6 +1665,10 @@ struct LibrairiePage   : public Component, public Button::Listener, private Asyn
                 beginBulkCaptureWithSym78101Request ("b1", "8101VC", 0x10);
             else if (result == 13)
                 beginBulkCaptureWithSym78101Request ("a6-0040", "0040VC", 0x05);
+            else if (result == 14)
+                beginInvokeLoadSelectedSlot();
+            else if (result == 15)
+                beginInvokeLoadBaselineAnonim();
             else if (result == 30)
                 beginAutoSync64InternalVoices();
             else if (result == 31)
@@ -1430,6 +1679,85 @@ struct LibrairiePage   : public Component, public Button::Listener, private Asyn
                 beginBulkCapture (Sy99BulkCaptureKind::voiceSingle,
                                   Sy99BulkCaptureSessionMode::singleAutoClose);
         });
+    }
+
+    void beginInvokeLoadSelectedSlot() noexcept
+    {
+        if (bankSelectedVoiceIndex < 0)
+        {
+            labelInfoLine.setText ("Invoke load: click a voice slot first", dontSendNotification);
+            Logger::writeToLog ("[InvokeLoad] aborted: no voice slot selected");
+            return;
+        }
+
+        if (sy99LibrarySession().active && sy99IsSy99LibrarySessionBankLabel (bankSelected))
+        {
+            const auto page = libraryContentPage();
+            auto* index = sy99EnsureVoiceCaptureIndex (page);
+            const File capture = sy99CaptureFileForLibraryPage (page);
+
+            if (index == nullptr)
+            {
+                labelInfoLine.setText ("Invoke load: library index missing", dontSendNotification);
+                return;
+            }
+
+            if (sy99BeginInvokeBulkLoadFromVoiceSlot (capture,
+                                                      bankSelectedVoiceIndex,
+                                                      index->offsets,
+                                                      index->lengths))
+            {
+                labelInfoLine.setText ("Invoke load TX started (8101+0040+EFMODE) — check SY99 LCD",
+                                       dontSendNotification);
+            }
+            else
+            {
+                const bool isPre = (page == Sy99LibraryContentPage::preset1Voices
+                                    || page == Sy99LibraryContentPage::preset2Voices);
+                labelInfoLine.setText (isPre
+                                           ? "Invoke load failed: PRE capture is 8101-only (no 0040 tails)"
+                                           : "Invoke load failed - see log (need paired 0040 or autosync #30)",
+                                       dontSendNotification);
+            }
+
+            return;
+        }
+
+        if (bankSelected.isEmpty())
+        {
+            labelInfoLine.setText ("Invoke load: select a bank file first", dontSendNotification);
+            return;
+        }
+
+        const File bankFile = appDirPath.getChildFile (bankSelected);
+
+        if (sy99BeginInvokeBulkLoadFromVoiceSlot (bankFile,
+                                                  bankSelectedVoiceIndex,
+                                                  voiceSysexFileOffsets,
+                                                  voiceSysexFileLengths))
+        {
+            labelInfoLine.setText ("Invoke load TX started — check SY99 LCD", dontSendNotification);
+        }
+        else
+        {
+            labelInfoLine.setText ("Invoke load failed — see log", dontSendNotification);
+        }
+    }
+
+    void beginInvokeLoadBaselineAnonim() noexcept
+    {
+        const File fixture = sy99BaselineAnonimFixtureFile();
+
+        if (sy99BeginInvokeBulkLoadFromSyxFile (fixture))
+        {
+            labelInfoLine.setText ("Invoke load ANONIM TX started — LCD should show ANONIM",
+                                   dontSendNotification);
+        }
+        else
+        {
+            labelInfoLine.setText ("Invoke load ANONIM failed: " + fixture.getFullPathName(),
+                                   dontSendNotification);
+        }
     }
 
     void showReceiveFromSy99Menu()
@@ -1487,6 +1815,7 @@ struct LibrairiePage   : public Component, public Button::Listener, private Asyn
                 const bool hadFiles = sync.savedFiles.size() > 0 || bulkSessionSaveCount > 0;
                 endFullLibrarySyncSession (hadFiles);
                 sy99InvalidateSy99LibrarySessionCaches();
+                sy99DrainPendingBankClickInvokeLoad();
                 sy99DrainPendingBankClick0040Fetch();
 
                 if (bankList.activateSy99LibrarySession())
@@ -1524,6 +1853,7 @@ struct LibrairiePage   : public Component, public Button::Listener, private Asyn
                         else
                             bankList.selectBankFileAndReloadVoices (saved);
 
+                        sy99DrainPendingBankClickInvokeLoad();
                         sy99DrainPendingBankClick0040Fetch();
                     }
                 }

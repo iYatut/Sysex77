@@ -21,6 +21,8 @@ public:
             logFile.copyFileTo (backup);
         }
 
+        logFile.deleteFile();
+
         getStreamPtr() = logFile.createOutputStream();
 
         if (auto* out = getStream())
@@ -31,6 +33,11 @@ public:
                             false, false, nullptr);
             out->flush();
             juce::Logger::writeToLog ("[MidiStream] SysEx log (new session): "
+                                      + logFile.getFullPathName());
+        }
+        else
+        {
+            juce::Logger::writeToLog ("[MidiStream] ERROR failed to open "
                                       + logFile.getFullPathName());
         }
     }
@@ -93,11 +100,20 @@ private:
         if (getStream() != nullptr)
             return;
 
-        getStreamPtr() = getLogFile().createOutputStream (std::ios::app);
+        const juce::File logFile = getLogFile();
+        logFile.deleteFile();
+        getStreamPtr() = logFile.createOutputStream();
 
         if (getStream() != nullptr)
-            juce::Logger::writeToLog ("[MidiStream] SysEx log (append): "
-                                      + getLogFile().getFullPathName());
+        {
+            getStream()->writeText ("--- sysex session "
+                                    + juce::Time::getCurrentTime().formatted ("%Y-%m-%d %H:%M:%S")
+                                    + " (reopen) ---\n",
+                                    false, false, nullptr);
+            getStream()->flush();
+            juce::Logger::writeToLog ("[MidiStream] SysEx log (reopen truncate): "
+                                      + logFile.getFullPathName());
+        }
     }
 
     static juce::String formatTimestamp()

@@ -90,6 +90,15 @@ public:
         rxBuffer.clear();
     }
 
+    /** Returns number of buffered messages dropped (sync phase boundary drain). */
+    int clearReceiveBufferAndCount() noexcept
+    {
+        const juce::ScopedLock sl (rxLock);
+        const int dropped = rxBuffer.size();
+        rxBuffer.clear();
+        return dropped;
+    }
+
     /** Sync worker: send next dump request (hardware only — no UI). */
     void send (const juce::MidiMessage& message) noexcept
     {

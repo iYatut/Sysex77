@@ -15,6 +15,7 @@
 #include <atomic>
 
 #include "LiveSynthState.h"
+#include "Sy99Lazy0040Fetch.h"
 #include "Sy99VoiceCaptureIndexCache.h"
 #include "VoicesTableModel.h"
 #include "YamahaLmVoiceDump.h"
@@ -103,7 +104,7 @@ inline Sy99BulkDumpAnalysis analyzeCapturedSysexMessages (
 
 inline int bulkCaptureIdleThresholdTicks (int capturedMessages) noexcept
 {
-    // 500 ms per tick → 12 s default, 25 s while a large bank is still streaming.
+    // 25 ms per tick → 600 ms default, longer while a large bank is still streaming.
     if (capturedMessages > 80)
         return 50;
 
@@ -111,6 +112,18 @@ inline int bulkCaptureIdleThresholdTicks (int capturedMessages) noexcept
         return 36;
 
     return 24;
+}
+
+/** BankClick lazy 0040: SY99 often replies >300 ms later with 8101VC then 0040VC bulk. */
+inline int bulkCaptureBankClick0040IdleThresholdTicks (int capturedMessages) noexcept
+{
+    if (capturedMessages <= 0)
+        return 120; // 3 s — wait for first bulk frame
+
+    if (capturedMessages == 1)
+        return 56;  // 1.4 s — gap between 8101 and full 0040 (SYM7 ~350 ms + margin)
+
+    return 24; // 600 ms idle after last frame
 }
 
 inline juce::String bulkCaptureInstructionForKind (Sy99BulkCaptureKind kind) noexcept
@@ -142,6 +155,20 @@ inline bool sy99UsesStableSyncCaptureName (const juce::String& namePrefix) noexc
 inline juce::File sy99StableSyncCapturePath (const juce::String& namePrefix) noexcept
 {
     return libraryCapturesDirPath().getChildFile (namePrefix + ".syx");
+}
+
+/** Full-library sync stores 0040 tails separately from 8101 names (internal only). */
+inline juce::File sy99Companion0040CaptureFor8101Bank (const juce::File& bank8101File) noexcept
+{
+    if (! bank8101File.existsAsFile())
+        return {};
+
+    const juce::String base = bank8101File.getFileNameWithoutExtension();
+
+    if (base.equalsIgnoreCase ("AUTOSYNC-VC-INT"))
+        return sy99StableSyncCapturePath ("AUTOSYNC-0040VC-INT");
+
+    return {};
 }
 
 /** Remove legacy `PREFIX-YYYYMMDD-HHMMSS.syx` after writing `PREFIX.syx`. */
@@ -195,6 +222,103 @@ inline juce::File sy99FindSyncCaptureFile (const juce::Array<juce::File>& savedF
     return {};
 }
 
+inline int sy99ExpectedFrameCountForCapturePrefix (const juce::String& namePrefix) noexcept
+{
+    if (namePrefix.contains ("VC") || namePrefix.containsIgnoreCase ("VOICE64"))
+        return 64;
+
+    if (namePrefix.contains ("MU"))
+        return 16;
+
+    return 0;
+}
+
+/** Stable AUTOSYNC path: write .tmp, verify size/frames, replace + .bak previous. */
+inline bool sy99WriteStableCaptureFileAtomic (const juce::File& destFile,
+                                            const juce::Array<juce::MidiMessage>& messages,
+                                            int expectedFrames) noexcept
+{
+    const juce::File temp = destFile.getSiblingFile (destFile.getFileNameWithoutExtension() + ".tmp");
+    temp.deleteFile();
+
+    juce::int64 expectedBytes = 0;
+
+    {
+        juce::FileOutputStream fos (temp);
+
+        if (fos.failedToOpen())
+        {
+            Logger::writeToLog ("[BulkRecv] SAVE ABORT failed temp open "
+                                + temp.getFullPathName());
+            return false;
+        }
+
+        for (const auto& m : messages)
+        {
+            fos.write (m.getRawData(), m.getRawDataSize());
+            expectedBytes += m.getRawDataSize();
+        }
+
+        fos.flush();
+    }
+
+    if (! temp.existsAsFile() || temp.getSize() != expectedBytes)
+    {
+        Logger::writeToLog ("[BulkRecv] SAVE ABORT size mismatch "
+                            + destFile.getFileName()
+                            + " bytes="
+                            + String (temp.getSize())
+                            + " expected="
+                            + String (expectedBytes));
+        temp.deleteFile();
+        return false;
+    }
+
+    const int framesOnDisk = sy99CountRawSysexFramesInCaptureFile (temp);
+
+    if (framesOnDisk != messages.size())
+    {
+        Logger::writeToLog ("[BulkRecv] SAVE ABORT frame count "
+                            + destFile.getFileName()
+                            + " frames="
+                            + String (framesOnDisk)
+                            + " messages="
+                            + String (messages.size()));
+        temp.deleteFile();
+        return false;
+    }
+
+    if (expectedFrames > 0 && framesOnDisk != expectedFrames)
+    {
+        Logger::writeToLog ("[BulkRecv] SAVE ABORT frames="
+                            + String (framesOnDisk)
+                            + " expected="
+                            + String (expectedFrames)
+                            + " file="
+                            + destFile.getFileName());
+        temp.deleteFile();
+        return false;
+    }
+
+    if (destFile.existsAsFile())
+    {
+        const juce::File backup = destFile.getSiblingFile (
+            destFile.getFileNameWithoutExtension() + ".bak");
+        destFile.copyFileTo (backup);
+    }
+
+    if (! temp.replaceFileIn (destFile))
+    {
+        Logger::writeToLog ("[BulkRecv] SAVE ABORT replace failed "
+                            + destFile.getFullPathName());
+        temp.deleteFile();
+        return false;
+    }
+
+    sy99CaptureManifestSidecarPath (destFile).deleteFile();
+    return true;
+}
+
 inline juce::File saveCapturedSysexToLibrary (const juce::Array<juce::MidiMessage>& messages,
                                               const juce::String& namePrefix,
                                               Sy99BulkDumpAnalysis* analysisOut = nullptr) noexcept
@@ -215,12 +339,7 @@ inline juce::File saveCapturedSysexToLibrary (const juce::Array<juce::MidiMessag
     if (analysisOut != nullptr)
         *analysisOut = analyzed;
 
-    int expectedFrames = 0;
-
-    if (namePrefix.contains ("VC") || namePrefix.containsIgnoreCase ("VOICE64"))
-        expectedFrames = 64;
-    else if (namePrefix.contains ("MU"))
-        expectedFrames = 16;
+    const int expectedFrames = sy99ExpectedFrameCountForCapturePrefix (namePrefix);
 
     juce::File outFile;
 
@@ -235,27 +354,49 @@ inline juce::File saveCapturedSysexToLibrary (const juce::Array<juce::MidiMessag
             outFile = outFile.getNonexistentSibling();
     }
 
-    FileOutputStream fos (outFile);
+    const bool stableName = sy99UsesStableSyncCaptureName (namePrefix);
 
-    if (fos.failedToOpen())
+    if (stableName)
     {
-        Logger::writeToLog ("[BulkRecv] Failed to write " + outFile.getFullPathName());
-        return {};
+        if (! sy99WriteStableCaptureFileAtomic (outFile, messages, expectedFrames))
+            return {};
+
+        if (expectedFrames > 0 && analyzed.lm8101Frames != expectedFrames
+            && analyzed.lm0040Frames != expectedFrames)
+        {
+            Logger::writeToLog ("[BulkRecv] WARN tag frameCount="
+                                + String (analyzed.lm8101Frames) + "×8101, "
+                                + String (analyzed.lm0040Frames) + "×0040"
+                                + " expected="
+                                + String (expectedFrames)
+                                + " prefix="
+                                + namePrefix);
+        }
     }
-
-    for (const auto& m : messages)
-        fos.write (m.getRawData(), m.getRawDataSize());
-
-    fos.flush();
-
-    if (expectedFrames > 0 && analyzed.lm8101Frames != expectedFrames)
+    else
     {
-        Logger::writeToLog ("[BulkRecv] WARN 8101 frameCount="
-                            + String (analyzed.lm8101Frames)
-                            + " expected="
-                            + String (expectedFrames)
-                            + " prefix="
-                            + namePrefix);
+        FileOutputStream fos (outFile);
+
+        if (fos.failedToOpen())
+        {
+            Logger::writeToLog ("[BulkRecv] Failed to write " + outFile.getFullPathName());
+            return {};
+        }
+
+        for (const auto& m : messages)
+            fos.write (m.getRawData(), m.getRawDataSize());
+
+        fos.flush();
+
+        if (expectedFrames > 0 && analyzed.lm8101Frames != expectedFrames)
+        {
+            Logger::writeToLog ("[BulkRecv] WARN 8101 frameCount="
+                                + String (analyzed.lm8101Frames)
+                                + " expected="
+                                + String (expectedFrames)
+                                + " prefix="
+                                + namePrefix);
+        }
     }
 
     if (outFile.existsAsFile())
@@ -752,6 +893,243 @@ inline const Sy99LibrarySyncPhase& sy99FullLibrarySyncPhaseAt (int index) noexce
     return sy99FullLibrarySyncPhases()[index];
 }
 
+inline bool sy99IsHostSym7RequestSysex (const juce::MidiMessage& m) noexcept
+{
+    if (! m.isSysEx())
+        return false;
+
+    const uint8* d = m.getSysExData();
+    const int n = m.getSysExDataSize();
+
+    return d != nullptr && n >= 2 && d[0] == 0x43 && d[1] == 0x20;
+}
+
+inline bool sy99IsSynthSym7ResponseSysex (const juce::MidiMessage& m) noexcept
+{
+    if (! m.isSysEx())
+        return false;
+
+    const uint8* d = m.getSysExData();
+    const int n = m.getSysExDataSize();
+
+    return d != nullptr && n >= 3 && d[0] == 0x43 && d[1] != 0x20;
+}
+
+inline int sy99SyncMinResponseBytesForPhase (const Sy99LibrarySyncPhase& phase) noexcept
+{
+    if (phase.lmType6 == nullptr)
+        return 64;
+
+    const juce::String tag (phase.lmType6);
+
+    if (tag.startsWithIgnoreCase ("8101"))
+        return 200;
+
+    if (tag.startsWithIgnoreCase ("0040"))
+        return YamahaLmVoiceDump::kMin0040VcFrameSize;
+
+    return 64;
+}
+
+inline juce::String sy99FormatSysexHeadHex (const juce::MidiMessage& m, int maxBytes = 14) noexcept
+{
+    const uint8* raw = m.getRawData();
+    const int rawN = m.getRawDataSize();
+    juce::String hex;
+
+    if (raw != nullptr && rawN > 0)
+    {
+        const int n = juce::jmin (maxBytes, rawN);
+
+        for (int i = 0; i < n; ++i)
+            hex << juce::String::toHexString ((int) raw[i]).paddedLeft ('0', 2) << " ";
+    }
+    else
+    {
+        const uint8* d = m.getSysExData();
+        const int n = juce::jmin (maxBytes, m.getSysExDataSize());
+
+        for (int i = 0; i < n; ++i)
+            hex << juce::String::toHexString ((int) d[i]).paddedLeft ('0', 2) << " ";
+    }
+
+    return hex.trimEnd();
+}
+
+inline juce::String sy99DescribeSysexBatchMessage (const juce::MidiMessage& m) noexcept
+{
+    if (! m.isSysEx())
+        return "non-sysex";
+
+    const uint8* d = m.getSysExData();
+    const int n = m.getSysExDataSize();
+    juce::String tag = "?";
+    uint8 byte28 = 0;
+    uint8 slotMm = 0;
+
+    if (d != nullptr && n >= 4)
+    {
+        if (YamahaLmVoiceDump::frameContainsLmTag (d, n, "8101VC"))
+            tag = "8101VC";
+        else if (YamahaLmVoiceDump::frameContainsLmTag (d, n, "0040VC"))
+            tag = "0040VC";
+        else if (YamahaLmVoiceDump::frameContainsLmTag (d, n, "8101MU"))
+            tag = "8101MU";
+        else if (YamahaLmVoiceDump::frameContainsLmTag (d, n, "0040MU"))
+            tag = "0040MU";
+
+        sy99ReadSym78101AddressFromSysexBody (d, n, tag.toRawUTF8(), byte28, slotMm);
+    }
+
+    const int dev = (d != nullptr && n >= 2) ? (int) d[1] : -1;
+    return "bytes=" + juce::String (m.getRawDataSize())
+           + " dev=" + juce::String::toHexString (dev).paddedLeft ('0', 2)
+           + " tag=" + tag
+           + " b28=" + juce::String::toHexString ((int) byte28).paddedLeft ('0', 2)
+           + " mm=" + juce::String::toHexString ((int) slotMm).paddedLeft ('0', 2)
+           + " head=" + sy99FormatSysexHeadHex (m);
+}
+
+inline void sy99SyncLogUnmatchedRxBatch (const juce::Array<juce::MidiMessage>& batch,
+                                         const Sy99LibrarySyncPhase& phase,
+                                         int expectMm,
+                                         const char* reason) noexcept
+{
+    juce::String line = "[FullLibrarySync] RX reject reason="
+                        + juce::String (reason)
+                        + " tag=" + juce::String (phase.lmType6)
+                        + " b28=" + juce::String::toHexString ((int) phase.byte28).paddedLeft ('0', 2)
+                        + " mm=" + juce::String::toHexString (expectMm).paddedLeft ('0', 2)
+                        + " batch=" + juce::String (batch.size());
+
+    for (int i = 0; i < batch.size(); ++i)
+        line += " | [" + juce::String (i) + "] " + sy99DescribeSysexBatchMessage (batch.getReference (i));
+
+    juce::Logger::writeToLog (line);
+}
+
+inline bool sy99SyncMessageContainsDataPtr (const juce::MidiMessage& m, const uint8* ptr) noexcept
+{
+    if (ptr == nullptr)
+        return false;
+
+    const uint8* raw = m.getRawData();
+    const int rawN = m.getRawDataSize();
+
+    if (raw != nullptr && rawN > 0 && ptr >= raw && ptr < raw + rawN)
+        return true;
+
+    const uint8* d = m.getSysExData();
+    const int n = m.getSysExDataSize();
+
+    return d != nullptr && n > 0 && ptr >= d && ptr < d + n;
+}
+
+/** Keep one RX frame matching the active sync phase slot (ignore foreign/duplicate SysEx). */
+inline bool sy99SyncExtractMatchingSlotFrame (const juce::Array<juce::MidiMessage>& batch,
+                                              const Sy99LibrarySyncPhase& phase,
+                                              int mm,
+                                              juce::MidiMessage& matchOut) noexcept
+{
+    const char* lmTag = phase.lmType6;
+
+    if (lmTag == nullptr || lmTag[0] == '\0')
+        return false;
+
+    const int minBytes = sy99SyncMinResponseBytesForPhase (phase);
+    juce::Array<juce::MidiMessage> synthBatch;
+
+    for (const auto& m : batch)
+    {
+        if (! m.isSysEx())
+            continue;
+
+        if (sy99IsHostSym7RequestSysex (m))
+            continue;
+
+        if (! sy99IsSynthSym7ResponseSysex (m))
+            continue;
+
+        synthBatch.add (m);
+    }
+
+    if (synthBatch.isEmpty())
+    {
+        sy99SyncLogUnmatchedRxBatch (batch, phase, mm, "no_synth_response");
+        return false;
+    }
+
+    auto tryBlock = [&] (const YamahaLmVoiceDump::LmBlockView& block) noexcept -> bool
+    {
+        if (block.data == nullptr || block.size < (size_t) minBytes)
+            return false;
+
+        uint8 byte28 = 0;
+        uint8 slotMm = 0;
+
+        if (! sy99ReadSym78101AddressFromSysexBody (block.data, (int) block.size, lmTag, byte28, slotMm))
+            return false;
+
+        if (byte28 != phase.byte28 || (int) slotMm != mm)
+        {
+            sy99SyncLogUnmatchedRxBatch (batch, phase, mm,
+                                         byte28 != phase.byte28 ? "wrong_b28" : "wrong_mm");
+            return false;
+        }
+
+        int bestSize = 0;
+
+        for (const auto& m : synthBatch)
+        {
+            if (! sy99SyncMessageContainsDataPtr (m, block.data))
+                continue;
+
+            const int sz = m.getRawDataSize();
+
+            if (sz >= minBytes && sz >= bestSize)
+            {
+                bestSize = sz;
+                matchOut = m;
+            }
+        }
+
+        if (bestSize == 0)
+        {
+            for (const auto& m : synthBatch)
+            {
+                const int sz = m.getRawDataSize();
+
+                if (sz >= bestSize)
+                {
+                    bestSize = sz;
+                    matchOut = m;
+                }
+            }
+        }
+
+        return bestSize > 0;
+    };
+
+    auto block = YamahaLmVoiceDump::findLmBlockInSysexMessages (synthBatch, lmTag);
+
+    if (tryBlock (block))
+        return true;
+
+    const juce::MemoryBlock concat = YamahaLmVoiceDump::concatLiveReadSysexRaw (synthBatch);
+
+    if (concat.getSize() >= (size_t) minBytes)
+    {
+        block = YamahaLmVoiceDump::findLmBlock (static_cast<const uint8*> (concat.getData()),
+                                                concat.getSize(), lmTag);
+
+        if (tryBlock (block))
+            return true;
+    }
+
+    sy99SyncLogUnmatchedRxBatch (batch, phase, mm, "no_matching_lm_block");
+    return false;
+}
+
 inline bool sy99LibrarySyncPhaseIncluded (int phaseIndex, bool extended) noexcept
 {
     if (phaseIndex < 0 || phaseIndex >= sy99FullLibrarySyncPhaseCount())
@@ -848,11 +1226,14 @@ struct Sy99FullLibrarySyncSession
     int phaseIndex = 0;
     int currentMm = 0;
     int requestsCompleted = 0;
+    int slotRetryCount = 0;
     bool handlingRxSlot = false;
     Sy99Sym7Pacing pacing;
     juce::Array<juce::MidiMessage> phaseAccumulator;
     juce::Array<juce::File> savedFiles;
 };
+
+inline constexpr int kSy99FullLibrarySyncMaxSlotRetries = 3;
 
 inline Sy99FullLibrarySyncSession& sy99FullLibrarySyncSession() noexcept
 {
@@ -880,6 +1261,7 @@ inline void sy99FullLibrarySyncReset() noexcept
     s.phaseIndex = 0;
     s.currentMm = 0;
     s.requestsCompleted = 0;
+    s.slotRetryCount = 0;
     s.handlingRxSlot = false;
     sy99Sym7ClearPendingSend (s.pacing);
     s.pacing = {};
@@ -895,9 +1277,6 @@ inline bool sy99AnyLibrarySyncActive() noexcept
 /** Map inbound SY99 bulk dump to Librairie VOICE/PRE1/PRE2/MULTI tab + slot. */
 inline void handleIncomingLibrarySynthPanelSysex (const juce::MidiMessage& message) noexcept
 {
-    if (sy99AnyLibrarySyncActive() || requestSysex || gRequestLiveVoiceRead)
-        return;
-
     if (! message.isSysEx())
         return;
 
@@ -910,6 +1289,23 @@ inline void handleIncomingLibrarySynthPanelSysex (const juce::MidiMessage& messa
 
     if (! hint.valid)
         return;
+
+    // Synth panel navigation must not be blocked by BankClick 0040 capture (requestSysex).
+    if (sy99AnyLibrarySyncActive() || gRequestLiveVoiceRead)
+        return;
+
+    // Expected recall 8101 for our BankClick 0040 fetch — ingest, do not abort capture / reopen slot.
+    if (sy99BankClick0040CaptureActive()
+        && hint.page == Sy99LibraryContentPage::internalVoices
+        && hint.mm == sy99BankClick0040FetchTargetMm())
+    {
+        juce::Logger::writeToLog ("[BankClick] fetch0040 recall 8101 mm="
+                                  + juce::String::toHexString (hint.mm).paddedLeft ('0', 2)
+                                  + " — keep capture");
+        return;
+    }
+
+    sy99OnInboundSynthNavigation (hint.mm);
 
     juce::MessageManager::callAsync ([hint]
     {
@@ -971,6 +1367,19 @@ inline void sy99RefreshLibraryNamesFromSyncCaptures (
         if (! match.existsAsFile())
             continue;
 
+        const int rawFrames = sy99CountRawSysexFramesInCaptureFile (match);
+
+        if (rawFrames > 0 && rawFrames != phase.mmCount)
+        {
+            juce::Logger::writeToLog ("[FullLibrarySync] Names skip bloated "
+                                      + match.getFileName()
+                                      + " frames="
+                                      + juce::String (rawFrames)
+                                      + " expected="
+                                      + juce::String (phase.mmCount));
+            continue;
+        }
+
         const int loaded = sy99LoadLibraryPageNamesFromCaptureFile (
             match,
             libraryContentPageFromId (phase.libraryPage),
@@ -987,6 +1396,86 @@ inline void sy99RefreshLibraryNamesFromSyncCaptures (
     }
 }
 
+/** Keep one RX frame per slot mm (prefer compact 0040 ~115 B, largest valid 8101). */
+inline juce::Array<juce::MidiMessage> sy99DedupeSyncCaptureMessagesBySlotMm (
+    const juce::Array<juce::MidiMessage>& messages,
+    const char* lmTag,
+    uint8 byte28) noexcept
+{
+    juce::Array<juce::MidiMessage> result;
+
+    if (lmTag == nullptr || lmTag[0] == '\0')
+        return messages;
+
+    const bool is0040 = juce::String (lmTag).startsWithIgnoreCase ("0040");
+    const int minBytes = is0040 ? YamahaLmVoiceDump::kMin0040VcFrameSize : 200;
+
+    juce::HashMap<int, int> bestIndexByMm;
+    juce::HashMap<int, int> bestScoreByMm;
+
+    for (int i = 0; i < messages.size(); ++i)
+    {
+        const auto& m = messages.getReference (i);
+
+        if (! m.isSysEx())
+            continue;
+
+        const uint8* raw = m.getRawData();
+        const int rawN = m.getRawDataSize();
+
+        if (raw == nullptr || rawN < minBytes)
+            continue;
+
+        uint8 frameB28 = 0;
+        uint8 frameMm = 0;
+
+        if (! YamahaLmVoiceDump::readLmSym7SlotAddressFromFrame (raw, rawN, lmTag,
+                                                                 frameB28, frameMm)
+            || frameB28 != byte28)
+            continue;
+
+        const int mm = (int) frameMm;
+        int score = rawN;
+
+        if (is0040)
+        {
+            if (rawN <= 130)
+                score += 10000;
+
+            score = 20000 - rawN;
+        }
+
+        if (! bestIndexByMm.contains (mm) || score > bestScoreByMm[mm])
+        {
+            bestIndexByMm.set (mm, i);
+            bestScoreByMm.set (mm, score);
+        }
+    }
+
+    juce::Array<int> orderedMm;
+    orderedMm.ensureStorageAllocated (bestIndexByMm.size());
+
+    for (auto it = bestIndexByMm.begin(); it != bestIndexByMm.end(); ++it)
+        orderedMm.add (it.getKey());
+
+    struct MmSorter
+    {
+        static int compareElements (int a, int b) noexcept { return a - b; }
+    };
+
+    MmSorter sorter;
+    orderedMm.sort (sorter);
+
+    for (int mm : orderedMm)
+        if (bestIndexByMm.contains (mm))
+            result.add (messages.getReference (bestIndexByMm[mm]));
+
+    if (result.isEmpty())
+        return messages;
+
+    return result;
+}
+
 inline juce::File saveFullLibrarySyncPhaseCapture (
     const juce::Array<juce::MidiMessage>& messages,
     const char* filePrefix) noexcept
@@ -994,5 +1483,54 @@ inline juce::File saveFullLibrarySyncPhaseCapture (
     if (filePrefix == nullptr || filePrefix[0] == '\0')
         return {};
 
-    return saveCapturedSysexToLibrary (messages, filePrefix, nullptr);
+    juce::Array<juce::MidiMessage> toSave = messages;
+    int phaseMmCount = 0;
+
+    for (int phaseIndex = 0; phaseIndex < sy99FullLibrarySyncPhaseCount(); ++phaseIndex)
+    {
+        const auto& phase = sy99FullLibrarySyncPhaseAt (phaseIndex);
+
+        if (phase.filePrefix != nullptr
+            && juce::String (phase.filePrefix).equalsIgnoreCase (filePrefix))
+        {
+            toSave = sy99DedupeSyncCaptureMessagesBySlotMm (messages, phase.lmType6, phase.byte28);
+            phaseMmCount = phase.mmCount;
+
+            if (toSave.size() != messages.size())
+            {
+                juce::Logger::writeToLog ("[FullLibrarySync] Dedupe "
+                                          + juce::String (filePrefix)
+                                          + " "
+                                          + juce::String (messages.size())
+                                          + " -> "
+                                          + juce::String (toSave.size())
+                                          + " frames");
+            }
+
+            if (messages.size() >= 16 && toSave.size() == 1)
+            {
+                juce::Logger::writeToLog ("[FullLibrarySync] SAVE ABORT dedupe collapse "
+                                          + juce::String (filePrefix)
+                                          + " "
+                                          + juce::String (messages.size())
+                                          + " -> 1");
+                return {};
+            }
+
+            if (phaseMmCount > 0 && toSave.size() != phaseMmCount)
+            {
+                juce::Logger::writeToLog ("[FullLibrarySync] SAVE ABORT frame count "
+                                          + juce::String (filePrefix)
+                                          + " got="
+                                          + juce::String (toSave.size())
+                                          + " expected="
+                                          + juce::String (phaseMmCount));
+                return {};
+            }
+
+            break;
+        }
+    }
+
+    return saveCapturedSysexToLibrary (toSave, filePrefix, nullptr);
 }

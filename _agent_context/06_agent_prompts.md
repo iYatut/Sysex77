@@ -1,7 +1,8 @@
 # Agent Prompts — Пошаговые задачи для реализации SY99 редактора
 
-> **Стек проекта: C++/JUCE. Нет JavaScript, TypeScript, npm.**  
-> Рабочие файлы: `Sysex77-master/Source/*.h`, `_agent_context/*.csv`, `_agent_context/*.md`.  
+> **Первым:** [`07_architecture_index.md`](07_architecture_index.md) + [`00_SPEC.md`](00_SPEC.md).  
+> **Продукт:** C++/JUCE (`Sysex77-master/Source/*.h`). **Debug mirror:** React `ui/` + Param API `:8765`.  
+> **Registry:** `sy99_param_bindings.json` + `LiveSynthState`; `valueSysexIn` = legacy only (R-NEW-5).  
 > Выполнять промпты **строго по порядку**. Каждый промпт — самостоятельная задача.  
 > Не переходить к следующему, пока предыдущий не завершён и не проверён.
 

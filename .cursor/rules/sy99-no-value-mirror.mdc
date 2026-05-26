@@ -1,0 +1,38 @@
+---
+description: SY-99 parser/resolve — не зеркалить значения между элементами; HW diff для offset
+globs: Sysex77-master/Source/**,_agent_context/**
+alwaysApply: true
+---
+
+# SY-99: без зеркалирования значений
+
+## Запрещено
+
+- Копировать значение **El.N ← El.M** (или bulk8101 El.2 ← El.1) в `resolveParam`, `refsFor`, populate rows «чтобы UI не был пустым».
+- Reconcile/mirror/score-эвристики для заполнения отсутствующего offset без HW-доказательства.
+- Добавлять audit-слои «на всякий случай» вместо одного fix offset.
+
+Примеры удалённых анти-паттернов:
+
+- `[EFSEND reconcile] El.2 EFLN <- El.1 bulk8101`
+- `efsendEl2SharesEl1Bulk8101` — El.2 EFSDVSNS/EFSDSCL указывал на тот же bulk8101 слот что El.1
+
+## Обязательный workflow при неизвестном offset
+
+1. Нет значения в dump → UI/resolver возвращает **нет данных** (`-`), не выдумываем.
+2. Меняем параметр **на синтезаторе** (Store если нужен bank).
+3. **Full Sync** или BankClick → diff байтов в `AUTOSYNC-*.syx` / `Sysex77_MIDI.log`.
+4. **Один** fix offset в парсере (например `YamahaLmVoiceDump.h`).
+5. Offline: `_agent_context/fixtures/_validate_bulk_parse.py`, `_probe_efln_slots.py`.
+6. Зафиксировать в `TEST_STATUS.md`.
+
+## Допустимые источники (не mirror)
+
+- **0040VC** per-element bytes (EFLN @99/@103, EFSDLV @100/@104 для elmode 4).
+- **8101VC** только где offset подтверждён fixture/HW.
+- **Live param9** `03 NN 00 09` per element (`b4` = 00/20/40/60).
+- **OUTSEL E1** через `reconciledOutselE1Bulk8101` — отдельный HW-кейс strip layout (не El.2←El.1 duplicate).
+
+## Score-эвристики
+
+Offset sweep/score (`efln1ElRawFromMixerStrip` best-of) — только после diff capture; не подменяет HW test.

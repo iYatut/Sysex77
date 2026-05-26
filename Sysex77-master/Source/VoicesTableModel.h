@@ -14,6 +14,7 @@
 
 #include "../JuceLibraryCode/JuceHeader.h"
 #include "LiveSynthState.h"
+#include "Sy99Lazy0040Fetch.h"
 #include "Sy99ParamRegistry.h"
 
 extern juce::StringArray arrayListVoices;
@@ -398,6 +399,13 @@ inline std::function<void (int globalIdx)>& libraryVoiceProgramChangeCallback() 
     return cb;
 }
 
+/** True when recall was queued because MIDI Out was not open yet (startup). */
+inline bool& libraryVoiceRecallDeferredToMidiOpen() noexcept
+{
+    static bool deferred = false;
+    return deferred;
+}
+
 /** Tab switch: CC0=0 + CC32 without PC (MidiDemo::sendLibraryPageBankSelectToSynth). */
 inline std::function<void (Sy99LibraryContentPage page)>& libraryPageBankSelectCallback() noexcept
 {
@@ -532,6 +540,15 @@ inline void markEditorPatchDirty() noexcept
 
     editorPatchDirty() = true;
     editorDirtyAuditLog ("mark", "user-edit");
+}
+
+inline void markEditorPatchDirtyFromSynth() noexcept
+{
+    if (suppressEditorPatchDirtyMark())
+        return;
+
+    editorPatchDirty() = true;
+    editorDirtyAuditLog ("mark", "synth-ingest");
 }
 
 /** Pre-fill slots during library sync so banks show live progress. */
@@ -870,7 +887,12 @@ inline void processInboundLibraryProgramChangeOnMidiThread (int pc, int midiChan
     libraryNavAuditLog ("RX", page, cc0Batch, cc32, pc, prevMm, mm, false, false);
 
     if (libraryInboundPcIsEcho (page, mm, pc))
+    {
+        sy99FlushPendingHwRefreshAfterRecall();
         return;
+    }
+
+    sy99OnInboundSynthNavigation (mm);
 
     juce::MessageManager::callAsync ([page, mm]
     {

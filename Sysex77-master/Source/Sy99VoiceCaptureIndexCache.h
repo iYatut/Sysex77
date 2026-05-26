@@ -82,6 +82,9 @@ bool sy99WriteCaptureManifestFromScan (const juce::File& captureFile) noexcept;
 bool sy99WriteCaptureManifestFromScanDeduped (const juce::File& captureFile,
                                               int expectedMmCount = 0) noexcept;
 
+/** Count every 0xF0 byte in capture file (audit / bloat guard). */
+int sy99CountRawSysexFramesInCaptureFile (const juce::File& captureFile) noexcept;
+
 void sy99CopyManifestToVoiceIndex (const Sy99CaptureManifest& manifest,
                                    Sy99VoiceCaptureIndex& indexOut) noexcept;
 

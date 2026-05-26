@@ -11,6 +11,7 @@
 #pragma once
 
 #include "Sy99BulkLibraryCapture.h"
+#include "Sy99LibraryApi.h"
 #include "Sy99MidiTransport.h"
 #include "Sy99DumpRequest.h"
 #include "DeviceModel.h"
@@ -130,6 +131,7 @@ inline void sy99LibrarySyncSaveFinishedPhase() noexcept
     if (saved.existsAsFile())
     {
         s.savedFiles.add (saved);
+        Sy99LibraryApi::invalidateVoiceDetailCache();
         juce::Logger::writeToLog ("[FullLibrarySync] Saved phase " + juce::String (s.phaseIndex)
                                   + " " + saved.getFullPathName());
     }
@@ -405,24 +407,66 @@ private:
 
         RxSlotGuard guard (s.handlingRxSlot);
 
+        bool slotAccepted = false;
+
         if (receivedOk)
         {
             const int receivedMm = s.currentMm;
-
-            sy99Sym7RecordRxLatency (s.pacing);
-
-            for (const auto& m : batch)
-                s.phaseAccumulator.add (m);
-
             const auto& phase = sy99FullLibrarySyncPhaseAt (s.phaseIndex);
+            juce::MidiMessage match;
+            juce::Array<juce::MidiMessage> slotBatch;
 
-            if (phase.updatesVoicePreview)
+            if (sy99SyncExtractMatchingSlotFrame (batch, phase, receivedMm, match))
             {
-                const auto page = libraryContentPageFromId (phase.libraryPage);
-                sy99LibrarySyncWritePreviewSlot (page,
-                                                 receivedMm,
-                                                 sy99PreviewNameFromSysexMessages (batch));
+                sy99Sym7RecordRxLatency (s.pacing);
+                slotBatch.add (match);
+                s.phaseAccumulator.add (match);
+                slotAccepted = true;
+                s.slotRetryCount = 0;
+
+                if (phase.updatesVoicePreview)
+                {
+                    const auto page = libraryContentPageFromId (phase.libraryPage);
+                    sy99LibrarySyncWritePreviewSlot (page,
+                                                     receivedMm,
+                                                     sy99PreviewNameFromSysexMessages (slotBatch));
+                }
             }
+            else
+            {
+                receivedOk = false;
+            }
+        }
+
+        if (! slotAccepted)
+        {
+            if (s.slotRetryCount < kSy99FullLibrarySyncMaxSlotRetries)
+            {
+                ++s.slotRetryCount;
+                Sy99MidiTransport::instance().clearReceiveBuffer();
+                const auto& phase = sy99FullLibrarySyncPhaseAt (s.phaseIndex);
+                sy99Sym7ScheduleGapFromLastTx (s.pacing, juce::jmax (phase.interRequestDelayMs, 350));
+                juce::Logger::writeToLog ("[FullLibrarySync] retry mm="
+                                          + juce::String::toHexString (s.currentMm).paddedLeft ('0', 2)
+                                          + " phase="
+                                          + juce::String (s.phaseIndex)
+                                          + " attempt="
+                                          + juce::String (s.slotRetryCount)
+                                          + "/"
+                                          + juce::String (kSy99FullLibrarySyncMaxSlotRetries));
+                sy99LibrarySyncLogTiming (s.pacing,
+                                          sy99FullLibrarySyncPhaseLabel (s.phaseIndex, s.currentMm),
+                                          true);
+                return;
+            }
+
+            juce::Logger::writeToLog ("[FullLibrarySync] WARN skip slot after "
+                                      + juce::String (kSy99FullLibrarySyncMaxSlotRetries)
+                                      + " retries phase="
+                                      + juce::String (s.phaseIndex)
+                                      + " "
+                                      + sy99FullLibrarySyncPhaseLabel (s.phaseIndex, s.currentMm));
+            s.slotRetryCount = 0;
         }
 
         ++s.requestsCompleted;
@@ -436,11 +480,11 @@ private:
             sy99Sym7ScheduleGapFromLastTx (s.pacing, phase.interRequestDelayMs);
             sy99LibrarySyncLogTiming (s.pacing,
                                       sy99FullLibrarySyncPhaseLabel (s.phaseIndex, s.currentMm),
-                                      ! receivedOk);
+                                      ! slotAccepted);
             return;
         }
 
-        if (receivedOk && ! s.phaseAccumulator.isEmpty())
+        if (slotAccepted && ! s.phaseAccumulator.isEmpty())
         {
             const auto& phase = sy99FullLibrarySyncPhaseAt (s.phaseIndex);
 
@@ -477,6 +521,19 @@ private:
         s.phaseIndex = nextPhaseIndex;
         s.currentMm = 0;
         const auto& nextPhase = sy99FullLibrarySyncPhaseAt (s.phaseIndex);
+
+        if (juce::String (nextPhase.lmType6).equalsIgnoreCase ("0040VC"))
+        {
+            const int drained = Sy99MidiTransport::instance().clearReceiveBufferAndCount();
+
+            if (drained > 0)
+            {
+                juce::Logger::writeToLog ("[FullLibrarySync] Phase drain before 0040VC dropped="
+                                          + juce::String (drained)
+                                          + " finishedPhase="
+                                          + juce::String (finishedPhase));
+            }
+        }
 
         if (nextPhase.updatesVoicePreview)
         {

@@ -14,6 +14,7 @@
 #include "MixerSection.h"
 #include "LiveSynthState.h"
 #include "Sy99ParamRegistry.h"
+#include "Sy99Lazy0040Fetch.h"
 #include "VoicesTableModel.h"
 //==============================================================================
 struct VoicePage   : public Component, public Slider::Listener, public ComboBox::Listener, public TextEditor::Listener, public TextButton::Listener,public ChangeListener, public ChangeBroadcaster, public Value::Listener, public ValueTree::Listener, public KeyListener , public Timer
@@ -256,7 +257,7 @@ struct VoicePage   : public Component, public Slider::Listener, public ComboBox:
     {
         if (value.refersToSameSourceAs (bankVoiceSlotApplyTrigger))
         {
-            if (getLiveSynthState().hasParsedBulk8101)
+            if (sy99BankClickApplyReady())
                 applyLiveSynthStateToEditor();
 
             return;
@@ -264,7 +265,7 @@ struct VoicePage   : public Component, public Slider::Listener, public ComboBox:
 
         if (value.refersToSameSourceAs (bankSelectedVoiceNameValue))
         {
-            if (getLiveSynthState().hasAnySyncSource())
+            if (sy99BankClickApplyReady())
                 applyLiveSynthStateToEditor();
             else
             {
@@ -869,7 +870,7 @@ struct VoicePage   : public Component, public Slider::Listener, public ComboBox:
     }
 
     /** Stage 3: LM 8101VC + 0040VC + live param9 → bound controls only; no outbound SysEx echo. */
-    bool applyLiveSynthStateToEditor() noexcept
+    bool applyLiveSynthStateToEditor (bool clearDirtyAfterApply = true) noexcept
     {
         const auto& lm = getLiveSynthState();
 
@@ -886,6 +887,7 @@ struct VoicePage   : public Component, public Slider::Listener, public ComboBox:
                             + " param9=" + String (lm.parameterFrameCount)
                             + " wol=" + String (wolResolved)
                             + " elmode=" + String (elmodeResolved)
+                            + " skip0040Blocks=" + String ((int) sy99BankClickSkip0040DependentBlocks())
                             + " dirty=" + String ((int) editorPatchDirty()));
 
         Logger::writeToLog ("[SyncFromSY99] applyLiveSynthStateToEditor slot="
@@ -923,8 +925,11 @@ struct VoicePage   : public Component, public Slider::Listener, public ComboBox:
             valueTreeVoice.setProperty (IDs::COMMONVOLUME, wolResolved, nullptr);
         }
 
+        const bool skip0040Blocks = sy99BankClickSkip0040DependentBlocks();
         juce::String commonLog;
 
+        if (! skip0040Blocks)
+        {
         for (auto id : Sy99ParamRegistry::kCommonDirectSliderIds)
         {
             LiveSynthState::ParamSource rowSrc = LiveSynthState::ParamSource::None;
@@ -980,6 +985,7 @@ struct VoicePage   : public Component, public Slider::Listener, public ComboBox:
                 commonLog << " AFTMD=" << aftmdUi << "(" << LiveSynthState::paramSourceTag (aftmdSrc) << ")";
             }
         }
+        } // ! skip0040Blocks
 
         juce::String elvlLog;
 
@@ -1222,9 +1228,11 @@ struct VoicePage   : public Component, public Slider::Listener, public ComboBox:
             }
         }
 
+        if (! skip0040Blocks)
         {
             LiveSynthState::ParamSource rowSrc = LiveSynthState::ParamSource::None;
             const int efmode = Sy99ParamRegistry::resolveParam (lm, Sy99ParamRegistry::Id::EFMODE, 0, rowSrc);
+
             Sy99ParamRegistry::debugLogResolvedParam (lm, Sy99ParamRegistry::Id::EFMODE, 0, "EFMODE");
 
             if (efmode >= 0)
@@ -1264,8 +1272,8 @@ struct VoicePage   : public Component, public Slider::Listener, public ComboBox:
             for (const auto& er : efsendRows)
             {
                 rowSrc = LiveSynthState::ParamSource::None;
-                const int efln = Sy99ParamRegistry::resolveParam (lm, Sy99ParamRegistry::Id::EFLN1EL,
-                                                                  er.elementIndex, rowSrc);
+                int efln = Sy99ParamRegistry::resolveParam (lm, Sy99ParamRegistry::Id::EFLN1EL,
+                                                            er.elementIndex, rowSrc);
 
                 if (efln >= 0)
                 {
@@ -1342,7 +1350,8 @@ struct VoicePage   : public Component, public Slider::Listener, public ComboBox:
         if (auto& relayout = syncCommonMixerLayoutCallback(); relayout != nullptr)
             relayout();
 
-        clearEditorPatchDirty();
+        if (clearDirtyAfterApply)
+            clearEditorPatchDirty();
         return true;
     }
 
@@ -1542,6 +1551,11 @@ struct VoicePage   : public Component, public Slider::Listener, public ComboBox:
     }
     void sliderValueChanged (Slider* slider) override
     {
+        if (slider == &sliderMixerEl1Efsendsel)
+            getLiveSynthState().elementEfsendselRaw[0] = (int) slider->getValue();
+        else if (slider == &sliderMixerEl2Efsendsel)
+            getLiveSynthState().elementEfsendselRaw[1] = (int) slider->getValue();
+
         if (isEditorPatchDirtySlider (slider) && isEditorSliderUserGesture (slider))
             markEditorPatchDirty();
     }

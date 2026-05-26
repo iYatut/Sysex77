@@ -46,6 +46,10 @@ import {
 } from '../utils/paramCodec';
 import { loadParamListResume, saveParamListResume } from '../utils/paramListResume';
 import {
+  libraryVoiceResumePath,
+  loadLibraryVoiceResume,
+} from '../utils/libraryVoiceResume';
+import {
   clearLegacyParamVerification,
   emptyParamVerificationState,
   hasVerificationData,
@@ -264,6 +268,7 @@ export function ParamDetailPage() {
   const { id = '' } = useParams();
   const [searchParams] = useSearchParams();
   const elementIndex = parseElementFromSearch(searchParams);
+  const libraryVoiceResume = useMemo(() => loadLibraryVoiceResume(), []);
 
   const [param, setParam] = useState<ParamMeta | null>(null);
   const [form, setForm] = useState<ParamCatalogForm | null>(null);
@@ -654,9 +659,20 @@ export function ParamDetailPage() {
     <section className="page">
       <header className="page-header page-header--detail">
         <div>
-          <Link to="/params" state={listBackState} className="back-link">
-            ← К списку
-          </Link>
+          <div className="page-back-links">
+            {libraryVoiceResume && (
+              <Link
+                to={libraryVoiceResumePath(libraryVoiceResume)}
+                className="back-link back-link--voice"
+                title="Вернуться к таблице проверки этого голоса"
+              >
+                ← {libraryVoiceResume.voiceLabel}
+              </Link>
+            )}
+            <Link to="/params" state={listBackState} className="back-link">
+              ← К списку
+            </Link>
+          </div>
           <h1>
             {id || 'Параметр'}
             {param?.perElement && (

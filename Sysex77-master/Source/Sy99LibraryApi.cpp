@@ -388,16 +388,15 @@ namespace Sy99LibraryApi
 
         if (capture.loadFileAsData (bankData))
         {
-            const auto* bytes = static_cast<const juce::uint8*> (bankData.getData());
-            int pairedOff = -1;
-            int pairedLen = 0;
+            juce::MemoryBlock frame0040;
+            juce::String resolveErr;
 
-            if (YamahaLmVoiceDump::findPaired0040FrameAfter (bytes, bankData.getSize(),
-                                                              slot->offset + slot->length,
-                                                              pairedOff, pairedLen))
+            if (sy99Resolve0040FrameForVoiceSlot (capture, voiceIndex, offsets, lengths,
+                                                  bankData, frame0040, resolveErr)
+                && ! frame0040.isEmpty())
             {
-                YamahaLmVoiceDump::parseLm0040VcMinimal (bytes + (size_t) pairedOff,
-                                                         pairedLen, parsed0040);
+                YamahaLmVoiceDump::parseLm0040VcMinimal (frame0040.getData(), frame0040.getSize(),
+                                                         parsed0040);
             }
         }
 
@@ -444,6 +443,12 @@ namespace Sy99LibraryApi
         }
 
         return result;
+    }
+
+    void invalidateVoiceDetailCache() noexcept
+    {
+        const juce::ScopedLock lock (gLibraryApiCacheLock);
+        gVoiceDetailCache.clear();
     }
 
     LibraryRouteParts parseLibraryPagesPath (const juce::String& path) noexcept

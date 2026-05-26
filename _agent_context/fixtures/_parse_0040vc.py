@@ -29,7 +29,7 @@ K_0040 = {
     "PNLASN": 49,    # confirmed fixtures 01-03
     "PNLRNG": 50,    # shares byte with AMRNG
     "COASN": 51,     # confirmed fixtures 01-03
-    "CORNG": 52,     # confirmed fixtures 01-03
+    "CORNG": 44,     # confirmed fixtures 01-03 (NN 0x33 sequential)
     "PNBASN": 53,     # confirmed fixtures 01-03
     "PNBRNG": 54,     # confirmed fixtures 01-03
     "EGBASN": 46,     # confirmed fixtures 01-03
@@ -46,7 +46,7 @@ K_0040 = {
 CONFIRMED = {
     "EFMODE", "WPBR", "ATPBR", "PMRNG", "PMASN", "AMASN", "AMRNG", "FMASN",
     "PNLASN", "PNLRNG", "COASN", "CORNG", "PNBASN", "PNBRNG", "EGBASN", "EGBRNG",
-    "WLASN", "WLLML", "MCTUN", "SPTPNT", "EFSDLV_E1", "EFSDLV_E2",
+    "WLASN", "WLLML", "MCTUN", "RNDP", "SPTPNT", "EFSDLV_E1", "EFSDLV_E2",
 }
 
 

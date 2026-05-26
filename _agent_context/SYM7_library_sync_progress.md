@@ -18,7 +18,7 @@
 
 **Не дублировать** bank math в `VoicesTableModel.h` / `MidiDemo.h` / `Librairie.h` — только вызовы navigation API.
 
-**Regression gate:** `python _agent_context/fixtures/_test_library_navigation.py` (7/7 PASS).
+**Regression gate:** `python _agent_context/fixtures/_test_library_navigation.py` (**20/20** PASS, includes `sy99HostSynthNavInSync` mirror).
 
 **Hardware verified (2026-05-23):** A16→B1 (not A1); in-bank wrap OK; PRE1 D4 recall; no echo loop.
 

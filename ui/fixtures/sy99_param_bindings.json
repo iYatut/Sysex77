@@ -107,14 +107,14 @@
   },
   {
     "id": "EFSDLV",
-    "bindStatus": "confirmed_bulk8101",
+    "bindStatus": "confirmed_elmode_split",
     "registryId": "EFSDLV",
-    "bulkSource": "8101",
-    "notes": "Sy99ParamRegistry confirmed",
+    "bulkSource": "8101|0040",
+    "notes": "elmode 4/8: authoritative 0040 efsdlvE1/E2 @100/@104; 8101 lmEfsdlvRaw @ efln+12 fallback only (NiteHwk HW poison 76 vs LCD 127/100)",
     "bulkRead": {
-      "frame": "8101",
-      "field": "lmEfsdlvRaw",
-      "maxElementIndex": 0
+      "frame": "8101|0040",
+      "field": "lmEfsdlvRaw|efsdlvE1Raw|efsdlvE2Raw",
+      "maxElementIndex": 1
     }
   },
   {

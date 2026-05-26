@@ -1,12 +1,22 @@
-﻿# SY99 Editor — Agent Specification
+# SY99 Editor — Agent Specification
 
-Главная точка входа для агента: прочитать этот файл первым, затем **`02_sysex_format.md`**, **`01_code_map.md`**, **`03_parameter_map.csv`**, **`05_missing_audit.md`**, **`sy99_sysex_complete.md`**, для bulk dump/request — **`sy99_bulk_dump_request.md`**, при работе с логами — **`04_observed_logs.md`** и **`Sysex77-master/Source/MIDI_MAP_OBSERVATIONS.md`**.
+**Читай первым:** [`07_architecture_index.md`](07_architecture_index.md) — правила R-NEW/R-KEEP, Decision Tree, data flow, smoke matrix.  
+Затем этот файл, **`02_sysex_format.md`**, **`01_code_map.md`**, для bindings — **`fixtures/sy99_param_bindings.json`**, для bulk — **`sy99_bulk_dump_request.md`**, для live-адресов — **`09_confirmed_addresses.md`** (не `MIDI_MAP_OBSERVATIONS.md`).
 
 ## Project Goal
 
 Build a complete **Yamaha SY99** patch editor with realtime **parameter-change SysEx** control. The running codebase is **Sysex77** (JUCE desktop app under `Sysex77-master/`): extend it toward covering all parameters described in the SY99 MIDI documentation.
 
-**Scope note:** `_agent_context/03_parameter_map.csv` currently tracks mainly **Voice Common** (`source=manual`) plus implementation notes (`OBS_IMPL_*`). Full SY99 coverage requires extending the CSV from **`sy99_sysex_complete.md`** / service manual — not yet exhaustive.
+**Scope note:** `_agent_context/03_parameter_map.csv` — **audit tracker** (~183 строк), не runtime registry. **37 confirmed params** — [`fixtures/sy99_param_bindings.json`](fixtures/sy99_param_bindings.json) + `Sy99ParamRegistry.cpp` `kMetaTable`. Полное покрытие SY99 — расширение из **`sy99_sysex_complete.md`**.
+
+## Два UI (K1 — зафиксировано Sprint 1b)
+
+| UI | Путь | Роль |
+|----|------|------|
+| **JUCE Sysex77** | `Sysex77-master/` | **Продукт:** editor, Librairie, MIDI, LiveSynthState |
+| **React debug mirror** | `ui/` + Param API `:8765` | Catalog, Library review, bindings visibility — **не** замена editor |
+
+React намеренно существует для отладки bindings и review workflow. См. [`ui/README.md`](../ui/README.md).
 
 ## Tech Stack
 
@@ -25,7 +35,11 @@ Build a complete **Yamaha SY99** patch editor with realtime **parameter-change S
 
 - **MIDI lib:** **JUCE `juce_audio_devices`** / MIDI (`MidiInput`, `MidiOutput`, `MidiMessage::createSysExMessage`) — see `01_code_map.md` MIDI section.
 
-**Note:** There is **no** npm / Node toolchain in this repo (`01_code_map.md`: no `.js`/`.ts` sources). Constraints below about npm apply only if a future JS/Web layer is added.
+- **Debug UI (optional):** **React + Vite** in `ui/` — `npm run dev` (proxy → Param API `:8765`). **Не** основной editor; см. [`07_architecture_index.md`](07_architecture_index.md).
+
+- **Regression gate:** Python fixtures `_agent_context/fixtures/_validate_*.py` — **обязательны** перед merge изменений parse/registry (R-NEW-2).
+
+**Note:** JUCE build — без npm для App target. npm только для `ui/` debug mirror.
 
 ## Key Files
 
@@ -84,31 +98,41 @@ Interpretation: Pan EG and related controls are implemented in code but **not** 
 - **Throttling:** target **≤ 30 parameter messages/sec** during continuous drag (encoder scrub) — enforced in `MidiSysex.h::sendSysex` (33 ms интервал, `lastSysexSendTime`). Финальное значение слайдера никогда не теряется: подавленный SysEx сохраняется в `pendingSysex[9]`, `ThrottleFlushTimer` (35 мс one-shot) дотягивает его до синта, если новое значение не пришло. Прямые вызовы `sendToOutputs` (bulk-кнопка, VNAM-пакет) пропускают throttle намеренно.
 - **Echo guard:** ignore reflected **own** SysEx for **~50 ms** after send — реализовано в `MidiDemo.h::handleAsyncUpdate` через кольцевой буфер `echoGuard[16]` и `isRecentEcho()`; обновление `valueSysexIn` блокируется, если адрес `[3..6]` совпал с недавним отправленным. `flushPendingSysex()` тоже регистрирует адрес.
 - **Do NOT read `MIDI_MAP_OBSERVATIONS.md` directly** when deriving addresses for code or CSV. Use **`_agent_context/09_confirmed_addresses.md`** — a pre-filtered extract containing only CONFIRMED / post-fix RECORDED sections. The raw file contains legacy addresses (`0x03`/`07`, `0x07`/`06`) and archive dumps that predate the MidiDemo buffer fix and will produce wrong mappings.
+- **Fixture gate (R-NEW-2):** перед merge правок `YamahaLmVoiceDump`, `Sy99ParamRegistry`, offsets в bindings — прогнать bundle из [`07_architecture_index.md`](07_architecture_index.md) §10; FAIL = stop.
+- **Inbound paths (K3):** 37 registry params → `LiveSynthState` + `applyLiveSynthStateToEditor`; `valueSysexIn` = legacy only (R-NEW-5). Unify = Sprint 8.
 
 ## Deliverables expected from agent
 
-The template below referenced JS modules; **this repo is C++/JUCE**. Map work to these equivalents:
+**Primary runtime registry (K2):** [`fixtures/sy99_param_bindings.json`](fixtures/sy99_param_bindings.json) — authoritative для 37 confirmed params. `03_parameter_map.csv` — audit/tracker, не заменяет bindings.
 
-1. **Parameter registry:** extend **`_agent_context/03_parameter_map.csv`** (and keep in sync with **`sy99_sysex_complete.md`**), not `parameterMap.js`.
-2. **Send/receive routing:** consolidate logic in **`MidiSysex.h`** / **`MidiDemo.h`** / widget `setMidiSysex` patterns — not `sysexRouter.ts`.
-3. **UI:** add missing **`MidiSlider`/`MidiCombo`** (and screens in `Voice.h`, Common tab, etc.) per audit — not React components unless the project changes stack.
-4. **Patch/state model:** **`ValueTrees.h`** / `Voice.h` ValueTree properties — not `patchState.ts`.
-5. **Tests:** project has **no** bundled JS unit tests; optional **manual SysEx smoke** via Sysex77 monitor, or add **C++ tests** only if the user introduces a test target (e.g. Catch2) — do not assume `npm test`.
+Map work to these equivalents:
 
-When the user explicitly wants a **web/JS** mirror editor, spawn a **separate** spec/folder; do not assume it exists here.
+1. **Parameter registry:** extend **`sy99_param_bindings.json`** (+ sync `kMetaTable` / `params_meta.json`), keep **`03_parameter_map.csv`** as audit trail.
+2. **Send/receive routing (registry):** `LiveSynthState` + `Sy99ParamRegistry` + `applyLiveSynthStateToEditor`.
+3. **Send/receive routing (legacy):** **`MidiSysex.h`** / **`MidiDemo.h`** / `valueSysexIn` + widget `setMidiSysex`.
+4. **UI:** JUCE **`MidiSlider`/`MidiCombo`** in `Voice.h`, Common tab — product editor. React `ui/` — debug mirror only.
+5. **Patch/state model:** **`LiveSynthState`** + **`ValueTrees.h`** / `Voice.h` ValueTree.
+6. **Tests:** `_validate_*.py` fixtures (mandatory for parse changes); manual HW smoke per [`TEST_STATUS.md`](../TEST_STATUS.md).
+
+When the user explicitly wants **React-only** UI changes, work in `ui/`; editor fixes stay in JUCE unless promoting bindings.
 
 ## Related agent context files
 
 | File | Role |
 |------|------|
+| **`07_architecture_index.md`** | **Rules, Decision Tree, data flow, smoke matrix** — read first |
 | `01_code_map.md` | File inventory + MIDI send/receive map |
 | `02_sysex_format.md` | Byte layout vs Yamaha notation |
-| `03_parameter_map.csv` | Tabular parameters & offsets |
+| `03_parameter_map.csv` | Audit tracker (~183 rows); **not** runtime registry |
+| `fixtures/sy99_param_bindings.json` | **Authoritative** bindings (37 registry params) |
 | `04_observed_logs.md` | Structured log placeholders (Pan EG) |
 | `05_missing_audit.md` | CSV ↔ code coverage + Group A/B |
 | `06_agent_prompts.md` | Step-by-step implementation prompts (C++/JUCE) |
 | `09_confirmed_addresses.md` | **Clean extract** — confirmed SysEx addresses; use instead of `MIDI_MAP_OBSERVATIONS.md` |
 | `sy99_sysex_complete.md` | Long-form SY99 SysEx notes (parameter change) |
 | `sy99_bulk_dump_request.md` | Bulk Dump Request/Response (LM 0040VC/MU/SY/MS), Memory_type/#, auto-dump strategy |
+| `library_binding_workflow.md` | 8-step bind cycle + PROMOTE |
+| `SPRINT_1a_rules_audit.md` | Audit K1–K7 (archive; rules inline in 07) |
 | `SYM7_library_sync_progress.md` | **Agent nav board** — SYM7 auto-sync research, capture log, gap matrix, parity backlog |
+| `ui/README.md` | React debug UI — run, API proxy, Library routes |
 | `SY99E2_reference.txt` | PDF / manual pointers |

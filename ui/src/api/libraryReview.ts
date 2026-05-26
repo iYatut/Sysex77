@@ -4,7 +4,7 @@ import type { LibraryReviewCreated, LibraryReviewRecord, LibraryReviewSubmitBody
 export async function createLibraryReview(
   body: LibraryReviewSubmitBody,
 ): Promise<LibraryReviewCreated> {
-  return apiFetch<LibraryReviewCreated>('/api/library/reviews', {
+  return apiFetch<LibraryReviewCreated>('/library/reviews', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
@@ -12,11 +12,11 @@ export async function createLibraryReview(
 }
 
 export async function fetchLibraryReview(reviewId: string): Promise<LibraryReviewRecord> {
-  return apiFetch<LibraryReviewRecord>(`/api/library/reviews/${encodeURIComponent(reviewId)}`);
+  return apiFetch<LibraryReviewRecord>(`/library/reviews/${encodeURIComponent(reviewId)}`);
 }
 
 export async function deleteLibraryReview(reviewId: string): Promise<void> {
-  await apiFetch<unknown>(`/api/library/reviews/${encodeURIComponent(reviewId)}`, {
+  await apiFetch<unknown>(`/library/reviews/${encodeURIComponent(reviewId)}`, {
     method: 'DELETE',
   });
 }

@@ -279,9 +279,41 @@ button.app-nav__link {
   padding-right: 4px !important;
 }
 
+.library-voice-params-table .params-row {
+  cursor: default;
+}
+
+.library-voice-params-table .params-row:hover {
+  background: #1c1f26;
+}
+
 .library-flag-col {
   width: 2.5rem;
   text-align: center;
+}
+
+.library-param-nav-col {
+  width: 3rem;
+  text-align: center;
+  padding-left: 4px !important;
+  padding-right: 4px !important;
+}
+
+.library-param-link-btn {
+  background: transparent;
+  border: 1px solid #3c4043;
+  border-radius: 4px;
+  color: #8ab4f8;
+  cursor: pointer;
+  font-size: 0.85rem;
+  line-height: 1.2;
+  min-width: 1.75rem;
+  padding: 2px 6px;
+}
+
+.library-param-link-btn:hover {
+  background: #3c4043;
+  border-color: #8ab4f8;
 }
 
 .library-status-dot {
@@ -504,6 +536,26 @@ button.app-nav__link {
   display: inline-block;
   margin-bottom: 8px;
   font-size: 0.95rem;
+}
+
+.page-back-links {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  margin-bottom: 8px;
+}
+
+.page-back-links .back-link {
+  margin-bottom: 0;
+}
+
+.back-link--voice {
+  color: #8ab4f8;
+}
+
+.back-link--voice:hover {
+  color: #aecbfa;
 }
 
 .page-header--detail {

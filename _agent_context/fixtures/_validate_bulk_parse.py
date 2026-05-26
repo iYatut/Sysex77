@@ -28,6 +28,39 @@ EXPECTED_EFLN1EL = {"03": 0x05}
 EXPECTED_EFSDLV = {"03": 127}
 EXPECTED_OUTSEL_BOTH = 0x06
 K_LM8101_VC_EFSDLV_DELTA_FROM_EFLN = 12
+K_LM8101_VC_EFSDLV_DELTA_FROM_ELVL = 47
+
+
+def efln_wire_masked(raw: int) -> int:
+    b = raw & 0xFF
+    ui = b & 0x05
+    if b & 0x02:
+        ui |= 0x01
+    return ui & 0x05
+
+
+def efln1_el_raw_from_mixer_strip(frame: bytes, elvl_off: int, elvl_e1_raw: int) -> int:
+    if elvl_off < 0:
+        return -1
+    if elvl_e1_raw == 0:
+        off35 = elvl_off + 35
+        return efln_wire_masked(frame[off35]) if off35 < len(frame) else -1
+    best_masked = -1
+    best_score = -1
+    for off in (elvl_off + 39, elvl_off + 26, elvl_off + 35):
+        if off >= len(frame):
+            continue
+        masked = efln_wire_masked(frame[off])
+        if masked <= 0:
+            continue
+        score = 3 if masked == 5 else 2 if masked == 4 else 1 if masked == 1 else 0
+        if score > best_score:
+            best_score = score
+            best_masked = masked
+    if best_masked >= 0:
+        return best_masked
+    off39 = elvl_off + 39
+    return efln_wire_masked(frame[off39]) if off39 < len(frame) else -1
 
 
 def find_lm8101_frame(data: bytes) -> bytes | None:
@@ -180,12 +213,10 @@ def parse_lm8101_vc(frame: bytes) -> dict:
     if outsel_off < len(frame) and eldt_e1_uses_outsel_strip(out["elmodeRaw"]):
         out["eldtRaw"][0] = frame[outsel_off]
 
-    # EFLN1EL El.1 @ elvl + delta (delta depends on WOL anchor; fixtures 01–03)
-    efln_delta = {94: 36, 93: 37, 95: 35}.get(wol_off, 36)
-    efln_off = elvl_off + efln_delta
-    if efln_off < len(frame):
-        out["efln1ElRaw"] = frame[efln_off]
-        efsdlv_off = efln_off + K_LM8101_VC_EFSDLV_DELTA_FROM_EFLN
+    # EFLN1EL El.1 @ mixer strip (elvl layout — HW matrix 2026-05-26)
+    if elvl_off >= 0:
+        out["efln1ElRaw"] = efln1_el_raw_from_mixer_strip(frame, elvl_off, elvl)
+        efsdlv_off = elvl_off + K_LM8101_VC_EFSDLV_DELTA_FROM_ELVL
         if efsdlv_off < len(frame):
             out["efsdlvRaw"] = frame[efsdlv_off]
 
@@ -347,9 +378,14 @@ def main() -> int:
 
 
 def bulk8101_efsd_tail_diagnostic(frame: bytes) -> int:
-    """Byte @ efln+12 in 8101VC (106 for EP|GrnDual — not EFSDLV for elmode 8)."""
+    """Byte @ elvl+47 in 8101VC (106 for EP|GrnDual — diagnostic, not authoritative EFSDLV)."""
     parsed = parse_lm8101_vc(frame)
-    return parsed["efsdlvRaw"]
+    pair = find_wol_elvl_e1_pair(frame)
+    if pair is None:
+        return parsed["efsdlvRaw"]
+    elvl_off = pair[1]
+    off = elvl_off + K_LM8101_VC_EFSDLV_DELTA_FROM_ELVL
+    return frame[off] if off < len(frame) else parsed["efsdlvRaw"]
 
 
 def validate_grndual_efsdlv() -> bool:

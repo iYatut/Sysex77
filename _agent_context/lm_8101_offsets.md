@@ -80,7 +80,8 @@ Primary block @36–56 (дубликат @57–76 игнорировать). Tai
 | 44 | PMASN | 0x2A | **✅** | fixtures 01–03 |
 | 48 | FMRNG / AMASN | 0x2F / 0x2C | **✅** | shared byte @48 |
 | 50 | PNLRNG / AMRNG | 0x31 / 0x2D | **✅** | shared byte @50 |
-| 52 | CORNG | 0x33 | **✅** | fixtures 01–03 |
+| 44 | CORNG | 0x33 | **✅** | fixtures 01–03 (NN sequential) |
+| 52 | RNDP | 0x3B | **✅** | fixtures 01–03 (NN sequential; was mis-tagged CORNG) |
 | 54 | PNBRNG / EGBRNG | 0x35 / 0x37 | **✅** | shared byte @54 |
 | **100** | **EFSDLV El.1** | live `03 00 00 0A` | **✅ elmode 8** | diff step A/B′: direct 7-bit (127/126/100) |
 | **104** | **EFSDLV El.2** | live `03 20 00 0A` | **✅ elmode 8** | diff step A/B′: direct 7-bit (127/100/14) |

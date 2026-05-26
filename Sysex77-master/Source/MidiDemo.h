@@ -48,6 +48,7 @@
  *******************************************************************************/
 #include "Values.h"
 #include "LiveSynthState.h"
+#include "EditorPatchDirtyGate.h"
 #include "Sy99HardwareMappingRuntime.h"
 #include "MidiStreamLogger.h"
 
@@ -122,6 +123,7 @@ int timeOut = 0;
 static String bankSelected;
 
 #include "Sy99Lazy0040Fetch.h"
+#include "Sy99InvokeBulkLoad.h"
 
 static Value valueSysexIn; //values from sysex midi in
 static bool boolStopReceive; //to shunt the midi in when sending
@@ -481,7 +483,12 @@ public:
                 sendRaw (msg.getRawData(), (long) msg.getRawDataSize());
         };
 
-        sy99BankClick0040ReapplyCallback() = []
+        sy99InvokeBulkLoadSendCallback() = [this] (const juce::MidiMessage& msg)
+        {
+            sendMidiMessagesToOutputsShunted ({ msg });
+        };
+
+        sy99BankClick0040ReapplyCallback() = [this]
         {
             const int targetMm = sy99BankClick0040FetchTargetMm();
 
@@ -494,7 +501,18 @@ public:
                 return;
             }
 
-            bankVoiceSlotApplyTrigger.setValue (++bankVoiceSlotApplyNonce);
+            const auto& s = getLiveSynthState();
+            juce::Logger::writeToLog ("[BankClick] fetch0040 reapply has0040="
+                                      + juce::String (s.hasParsedBulk0040 ? 1 : 0)
+                                      + " EFMODE_bulk="
+                                      + juce::String (s.lm0040EfmodeRaw)
+                                      + " skip0040Blocks="
+                                      + juce::String (sy99BankClickSkip0040DependentBlocks() ? 1 : 0));
+
+            if (auto* voicePage = dynamic_cast<VoicePage*> (tabs->getTabContentComponent (kTabVoice)))
+                voicePage->applyLiveSynthStateToEditor();
+            else
+                bankVoiceSlotApplyTrigger.setValue (++bankVoiceSlotApplyNonce);
         };
 
         librarySy99SessionSlotSelectCallback() = [] (int globalMm)
@@ -543,6 +561,18 @@ public:
             commitEditorSessionToLiveSynthBaselineCallback() = [voicePage]()
             {
                 voicePage->commitEditorSessionToLiveSynthBaseline();
+            };
+
+            editorPatchDirtyMarkCallback() = [] { markEditorPatchDirtyFromSynth(); };
+            editorPatchDirtySuppressCallback() = [] { return suppressEditorPatchDirtyMark(); };
+            editorRefreshFromLiveSynthCallback() = [voicePage]()
+            {
+                if (voicePage == nullptr)
+                    return;
+
+                suppressEditorPatchDirtyMark() = true;
+                voicePage->applyLiveSynthStateToEditor (false);
+                suppressEditorPatchDirtyMark() = false;
             };
 
             Sy99ParamRegistry::metaRegistryChangedCallback() = [voicePage]()
@@ -935,6 +965,8 @@ private:
             timeOut = 0;
         }
 
+        sy99BankClick0040NoteIncoming (message);
+
         if (gRequestLiveVoiceRead && message.isSysEx())
         {
             notifyLiveVoiceReadActivity();
@@ -1105,10 +1137,18 @@ private:
                     const uint8 incomingAddr[4] = { data[3], data[4], data[5], data[6] };
                     if (! isRecentEcho (incomingAddr))
                     {
+                        const bool ingestedLive = gLiveSynthState.ingestParameterFrame (data[3], data[4], data[5],
+                                                                                        data[6], data[7], data[8]);
                         valueSysexIn = make_var_array(data[3], data[4], data[5],
                                                       data[6], data[7], data[8]);
                         Sy99HardwareMappingRuntime::onLiveParameterSysex (data[3], data[4], data[5],
                                                                           data[6], data[8]);
+
+                        if (ingestedLive)
+                        {
+                            if (auto& refresh = editorRefreshFromLiveSynthCallback(); refresh != nullptr)
+                                refresh();
+                        }
                     }
                 }
             }
@@ -1252,10 +1292,23 @@ public:
         if (! pendingLibraryRecallValid || pendingLibraryRecallIdx < 0)
             return;
 
+        if (! hasMidiOutputOpen())
+            return;
+
         const int mm = pendingLibraryRecallIdx;
+        const bool wasDeferred = libraryVoiceRecallDeferredToMidiOpen();
         pendingLibraryRecallValid = false;
         pendingLibraryRecallIdx = -1;
+        libraryVoiceRecallDeferredToMidiOpen() = false;
+
+        if (wasDeferred)
+        {
+            sendLibraryPageBankSelectToSynth (libraryContentPage());
+            libraryForceNextRecallFullTriple() = true;
+        }
+
         sendLibraryVoiceRecallToSynth (mm);
+        sy99BeginBankClickHwRefreshAfterRecallWait();
     }
 
     /** [LIBSYNC] Recall SY99 voice (outbound). Strong CC0+CC32+PC when not in sync;
@@ -1276,10 +1329,13 @@ public:
             return;
         }
 
+        libraryVoiceRecallDeferredToMidiOpen() = false;
+
         if (! hasMidiOutputOpen())
         {
             pendingLibraryRecallIdx = globalIdx;
             pendingLibraryRecallValid = true;
+            libraryVoiceRecallDeferredToMidiOpen() = true;
             Logger::writeToLog ("[LIBSYNC] Recall deferred (MIDI Out not open) mm="
                                 + String (globalIdx)
                                 + " page=" + String ((int) page));
@@ -1292,6 +1348,10 @@ public:
         const int bankLsb = sy99BankLsbForLibraryContentPage (page);
         const int program = sy99OutboundProgramForLibrarySlot (page, globalIdx);
         const bool fullTriple = libraryOutboundNeedsFullTriple (page, globalIdx);
+
+        if (fullTriple && libraryForceNextRecallFullTriple())
+            libraryForceNextRecallFullTriple() = false;
+
         const bool sendCc0 = sy99OutboundNeedsCc0ForRecall (page, globalIdx, fullTriple);
         const int cc0Value = fullTriple ? 0 : bankMsb;
 
@@ -1717,6 +1777,7 @@ public:
         juce::MessageManager::callAsync ([this]
         {
             flushPendingLibraryRecall();
+            sy99DrainPendingBankClick0040Fetch();
         });
     }
 

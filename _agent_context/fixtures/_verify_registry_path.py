@@ -122,6 +122,25 @@ def bulk8101_for_resolve(m: dict, raw: int) -> int:
     return raw
 
 
+def catalog_efsdlv_raw0040(slot_raw: int, p40: dict, el: int) -> int:
+    """Mirror populateRegistryDumpFields: authoritative parsed 0040 overrides bulk slot (incl. poison 0)."""
+    field = "EFSDLV_E1" if el == 0 else "EFSDLV_E2"
+    raw = slot_raw
+    fields = p40.get("fields") or {}
+    if field in fields and fields[field]["raw"] >= 0:
+        raw = fields[field]["raw"]
+    return raw
+
+
+def catalog_efsdlv_ui_value(raw8101: int, raw0040: int) -> int:
+    """Mirror populateRegistryDumpFields uiValue: raw0040 before raw8101 for EFSDLV."""
+    if raw0040 >= 0:
+        return raw0040
+    if raw8101 >= 0:
+        return raw8101
+    return -1
+
+
 def resolve_efsdlv(s: State, el: int = 0) -> tuple[int, str]:
     live = s.elementEfsendlvlRaw[el] if 0 <= el < 4 else -1
     if live >= 0:
@@ -282,6 +301,10 @@ def main() -> int:
         record("bulk/grndual/EFSDLV_E1", got == 127 and src == "0040", "EFSDLV", "grndual", got, 127, src)
         got2, src2 = resolve_efsdlv(s, 1)
         record("bulk/grndual/EFSDLV_E2", got2 == 127 and src2 == "0040", "EFSDLV", "grndual", got2, 127, src2)
+        cat_e2 = catalog_efsdlv_raw0040(0, p40, 1)
+        record("catalog/grndual/EFSDLV_E2_poison_slot", cat_e2 == 127, "EFSDLV", "catalog-poison0", cat_e2, 127, "0040")
+        ui_e2 = catalog_efsdlv_ui_value(raw8101=0, raw0040=cat_e2)
+        record("catalog/grndual/EFSDLV_E2_uiValue", ui_e2 == 127, "EFSDLV", "catalog-ui", ui_e2, 127, "0040")
 
         s2 = State()
         apply_bulk8101(s2, p8101)

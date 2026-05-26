@@ -17,6 +17,9 @@ namespace Sy99LibraryApi
     juce::var libraryPageVoicesFromSlug (const juce::String& pageSlug);
     juce::var libraryVoiceDetailFromSlug (const juce::String& pageSlug, int mm, juce::String& errorOut);
 
+    /** Drop cached voice detail JSON (after sync save or capture rewrite). */
+    void invalidateVoiceDetailCache() noexcept;
+
     struct LibraryRouteParts
     {
         bool valid = false;

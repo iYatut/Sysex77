@@ -15,6 +15,44 @@
 
 namespace Sy99LibraryBulkRead
 {
+    inline bool bindingBulkSourceContainsFrame (const juce::String& bulkSource,
+                                               const char* frameTag) noexcept
+    {
+        if (bulkSource.equalsIgnoreCase (frameTag))
+            return true;
+
+        juce::StringArray parts;
+        parts.addTokens (bulkSource, "|", "");
+
+        for (const auto& part : parts)
+            if (part.trim().equalsIgnoreCase (frameTag))
+                return true;
+
+        return false;
+    }
+
+    inline juce::String bindingFieldForElement (const juce::String& fieldSpec,
+                                                int elementIndex) noexcept
+    {
+        juce::StringArray parts;
+        parts.addTokens (fieldSpec, "|", "");
+
+        if (parts.size() <= 1)
+            return fieldSpec.trim();
+
+        // EFSDLV elmode split: lmEfsdlvRaw|efsdlvE1Raw|efsdlvE2Raw
+        if (elementIndex == 0 && parts.size() >= 2)
+            return parts[1].trim();
+
+        if (elementIndex == 1 && parts.size() >= 3)
+            return parts[2].trim();
+
+        if (elementIndex == 0)
+            return parts[0].trim();
+
+        return {};
+    }
+
     inline bool bindingAllowsParsed8101 (const Sy99MasterCatalog::Binding& binding) noexcept
     {
         if (binding.bindStatus.equalsIgnoreCase ("manual_only") || binding.bindStatus.isEmpty())
@@ -27,7 +65,7 @@ namespace Sy99LibraryBulkRead
         if (binding.bulkRead.frame.equalsIgnoreCase ("8101"))
             return true;
 
-        return binding.bulkSource.equalsIgnoreCase ("8101");
+        return bindingBulkSourceContainsFrame (binding.bulkSource, "8101");
     }
 
     inline bool bindingAllowsParsed0040 (const Sy99MasterCatalog::Binding& binding) noexcept
@@ -42,7 +80,7 @@ namespace Sy99LibraryBulkRead
         if (binding.bulkRead.frame.equalsIgnoreCase ("0040"))
             return true;
 
-        return binding.bulkSource.equalsIgnoreCase ("0040");
+        return bindingBulkSourceContainsFrame (binding.bulkSource, "0040");
     }
 
     inline int read8101Field (const juce::String& field,
@@ -87,10 +125,6 @@ namespace Sy99LibraryBulkRead
             if (elementIndex == 0)
                 return parsed.lmEfln1ElRaw;
 
-            if (elementIndex == 1
-                && YamahaLmVoiceDump::maxElnsAnchorSlotsFromElmodeRaw (parsed.elmodeRaw) >= 1)
-                return parsed.lmEfln1ElRaw;
-
             return -1;
         }
 
@@ -133,6 +167,8 @@ namespace Sy99LibraryBulkRead
         if (field == "rndpRaw")   return parsed.rndpRaw;
         if (field == "efsdlvE1Raw") return parsed.efsdlvE1Raw;
         if (field == "efsdlvE2Raw") return parsed.efsdlvE2Raw;
+        if (field == "eflnE1Raw")   return parsed.eflnE1Raw;
+        if (field == "eflnE2Raw")   return parsed.eflnE2Raw;
         if (field == "sptpntRaw") return parsed.sptpntRaw;
         if (field == "efmodeRaw") return parsed.efmodeRaw;
 
@@ -149,7 +185,7 @@ namespace Sy99LibraryBulkRead
         if (binding.bulkRead.maxElementIndex >= 0 && elementIndex > binding.bulkRead.maxElementIndex)
             return -1;
 
-        const juce::String field = binding.bulkRead.field;
+        const juce::String field = bindingFieldForElement (binding.bulkRead.field, elementIndex);
 
         if (field.isEmpty())
             return -1;
@@ -159,12 +195,13 @@ namespace Sy99LibraryBulkRead
     }
 
     inline int readParsed0040FromBinding (const Sy99MasterCatalog::Binding& binding,
+                                          int elementIndex,
                                           const YamahaLmVoiceDump::Lm0040VcMinimal* parsed0040) noexcept
     {
         if (parsed0040 == nullptr || ! parsed0040->found0040 || ! bindingAllowsParsed0040 (binding))
             return -1;
 
-        const juce::String field = binding.bulkRead.field;
+        const juce::String field = bindingFieldForElement (binding.bulkRead.field, elementIndex);
 
         if (field.isEmpty())
             return -1;
@@ -205,9 +242,7 @@ namespace Sy99LibraryBulkRead
 
                 return parsed8101->lmOutselRaw[elementIndex];
             case Sy99ParamRegistry::Id::EFLN1EL:
-                if (elementIndex == 0
-                    || (elementIndex == 1
-                        && YamahaLmVoiceDump::maxElnsAnchorSlotsFromElmodeRaw (parsed8101->elmodeRaw) >= 1))
+                if (elementIndex == 0)
                     return parsed8101->lmEfln1ElRaw;
 
                 return -1;
@@ -265,6 +300,18 @@ namespace Sy99LibraryBulkRead
                     return parsed0040->efsdlvE2Raw;
 
                 return -1;
+
+            case Sy99ParamRegistry::Id::EFLN1EL:
+                if (parsed8101 != nullptr && elementIndex == 0
+                    && YamahaLmVoiceDump::efsendBulk0040E1TrustedForElmodeRaw (parsed8101->elmodeRaw))
+                    return parsed0040->eflnE1Raw;
+
+                if (parsed8101 != nullptr && elementIndex == 1
+                    && YamahaLmVoiceDump::efsendBulk0040E2TrustedForElmodeRaw (parsed8101->elmodeRaw))
+                    return parsed0040->eflnE2Raw;
+
+                return -1;
+
             default: break;
         }
 

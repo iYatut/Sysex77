@@ -199,6 +199,20 @@ namespace
         return 0;
     }
 
+    int countRawSysexFramesInBytes (const juce::uint8* data, size_t size) noexcept
+    {
+        if (data == nullptr || size == 0)
+            return 0;
+
+        int frames = 0;
+
+        for (size_t i = 0; i < size; ++i)
+            if (data[i] == 0xF0)
+                ++frames;
+
+        return frames;
+    }
+
     bool isSlotSliceValid (const juce::uint8* fileData,
                            size_t fileSize,
                            const Sy99CaptureManifestSlot& slot) noexcept
@@ -519,6 +533,20 @@ bool sy99WriteCaptureManifestFromMessages (const juce::Array<juce::MidiMessage>&
     return sy99WriteCaptureManifestToDisk (captureFile, manifest);
 }
 
+int sy99CountRawSysexFramesInCaptureFile (const juce::File& captureFile) noexcept
+{
+    if (! captureFile.existsAsFile())
+        return -1;
+
+    juce::MemoryBlock mb;
+
+    if (! captureFile.loadFileAsData (mb))
+        return -1;
+
+    return countRawSysexFramesInBytes (static_cast<const juce::uint8*> (mb.getData()),
+                                       mb.getSize());
+}
+
 bool sy99WriteCaptureManifestFromScanDeduped (const juce::File& captureFile,
                                               int expectedMmCount) noexcept
 {
@@ -533,6 +561,23 @@ bool sy99WriteCaptureManifestFromScanDeduped (const juce::File& captureFile,
         juce::Logger::writeToLog ("[LibraryIndex] skip 0040 audit "
                                   + captureFile.getFileName());
         return false;
+    }
+
+    if (expectedMmCount > 0
+        && captureFile.getFileName().startsWithIgnoreCase ("AUTOSYNC-"))
+    {
+        const int rawFrames = sy99CountRawSysexFramesInCaptureFile (captureFile);
+
+        if (rawFrames > 0 && rawFrames != expectedMmCount)
+        {
+            juce::Logger::writeToLog ("[LibraryIndex] skip repair bloated file="
+                                      + captureFile.getFileName()
+                                      + " frames="
+                                      + juce::String (rawFrames)
+                                      + " expected="
+                                      + juce::String (expectedMmCount));
+            return false;
+        }
     }
 
     const auto t0 = juce::Time::getMillisecondCounterHiRes();
@@ -690,6 +735,23 @@ const Sy99CaptureManifest* sy99GetCaptureManifest (const juce::File& captureFile
                     return nullptr;
 
                 const int expected = inferExpectedMmCountFromCaptureFile (captureFile);
+
+                if (expected > 0
+                    && captureFile.getFileName().startsWithIgnoreCase ("AUTOSYNC-"))
+                {
+                    const int rawFrames = sy99CountRawSysexFramesInCaptureFile (captureFile);
+
+                    if (rawFrames > 0 && rawFrames != expected)
+                    {
+                        juce::Logger::writeToLog ("[LibraryIndex] skip manifest repair bloated file="
+                                                  + captureFile.getFileName()
+                                                  + " frames="
+                                                  + juce::String (rawFrames)
+                                                  + " expected="
+                                                  + juce::String (expected));
+                        return nullptr;
+                    }
+                }
 
                 if (! sy99WriteCaptureManifestFromScanDeduped (captureFile, expected))
                     return nullptr;

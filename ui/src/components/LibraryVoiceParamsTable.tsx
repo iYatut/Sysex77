@@ -39,6 +39,13 @@ import {
   LIBRARY_VOICE_FOCUS_FILTERS_EVENT,
   scrollToLibraryVoiceFilters,
 } from '../utils/libraryVoiceFilters';
+import {
+  clearLibraryReviewDraft,
+  loadLibraryReviewDraft,
+  manualItemsFromDraft,
+  saveLibraryReviewDraft,
+} from '../utils/libraryReviewSessionDraft';
+import { saveLibraryVoiceResume } from '../utils/libraryVoiceResume';
 
 type LibraryVoiceParamsTableProps = {
   detail: LibraryVoiceDetail;
@@ -163,7 +170,9 @@ export function LibraryVoiceParamsTable({
   const [dragOverRowKey, setDragOverRowKey] = useState<string | null>(null);
   const [dragColumnId, setDragColumnId] = useState<LibraryColumnId | null>(null);
 
-  const [manualItems, setManualItems] = useState<Map<string, LibraryReviewItem>>(new Map());
+  const [manualItems, setManualItems] = useState<Map<string, LibraryReviewItem>>(() =>
+    manualItemsFromDraft(loadLibraryReviewDraft(detail.pageId, detail.mm)),
+  );
   const [annotateTarget, setAnnotateTarget] = useState<AnnotateTarget | null>(null);
 
   const [reviewId, setReviewId] = useState<string | null>(reviewIdFromUrl);
@@ -184,6 +193,17 @@ export function LibraryVoiceParamsTable({
   useEffect(() => {
     setReviewId(reviewIdFromUrl);
   }, [reviewIdFromUrl]);
+
+  useEffect(() => {
+    if (reviewIdFromUrl) {
+      return;
+    }
+    setManualItems(manualItemsFromDraft(loadLibraryReviewDraft(detail.pageId, detail.mm)));
+  }, [detail.pageId, detail.mm, reviewIdFromUrl]);
+
+  useEffect(() => {
+    saveLibraryReviewDraft(detail.pageId, detail.mm, [...manualItems.values()]);
+  }, [manualItems, detail.pageId, detail.mm]);
 
   useEffect(() => {
     if (!reviewIdFromUrl) {
@@ -399,6 +419,24 @@ export function LibraryVoiceParamsTable({
     persistRowOrder(moveRowKeyByStep(rowOrder, rowKey, delta));
   };
 
+  const handleOpenParam = useCallback(
+    (row: LibraryVoiceParam) => {
+      saveLibraryReviewDraft(detail.pageId, detail.mm, [...manualItems.values()]);
+      saveLibraryVoiceResume({
+        libraryId,
+        pageId: detail.pageId,
+        mm: detail.mm,
+        voiceLabel: `${detail.slotCode} — ${detail.voiceName}`,
+        reviewId: reviewId ?? undefined,
+      });
+      const base = `/params/${encodeURIComponent(row.id)}`;
+      const path =
+        row.elementIndex > 0 ? `${base}?element=${row.elementIndex}` : base;
+      navigate(path);
+    },
+    [detail.mm, detail.pageId, detail.slotCode, detail.voiceName, libraryId, manualItems, navigate, reviewId],
+  );
+
   const handleSubmitReview = async () => {
     setSubmitting(true);
     setSubmitError(null);
@@ -456,6 +494,7 @@ export function LibraryVoiceParamsTable({
       setReviewId(null);
       setReviewUrl(null);
       setManualItems(new Map());
+      clearLibraryReviewDraft(detail.pageId, detail.mm);
       onReviewIdChange(null);
     } catch (err) {
       setSubmitError(err instanceof Error ? err.message : 'Ошибка удаления');
@@ -640,6 +679,9 @@ export function LibraryVoiceParamsTable({
                   {column.label}
                 </th>
               ))}
+              <th className="library-param-nav-col" title="Открыть страницу параметра">
+                Param
+              </th>
               <th className="library-flag-col" title="Отметить расхождение">
                 ⚑
               </th>
@@ -656,14 +698,6 @@ export function LibraryVoiceParamsTable({
                 <tr
                   key={rowKey}
                   className={rowClassName(row, manualItems, dragOverRowKey === rowKey)}
-                  tabIndex={0}
-                  onClick={() => navigate(`/params/${encodeURIComponent(row.id)}`)}
-                  onKeyDown={(event) => {
-                    if (event.key === 'Enter' || event.key === ' ') {
-                      event.preventDefault();
-                      navigate(`/params/${encodeURIComponent(row.id)}`);
-                    }
-                  }}
                   onDragOver={(event) => {
                     if (!dragRowKey) {
                       return;
@@ -776,6 +810,19 @@ export function LibraryVoiceParamsTable({
                       </td>
                     );
                   })}
+                  <td className="library-param-nav-col">
+                    <button
+                      type="button"
+                      className="library-param-link-btn"
+                      title={`Параметр ${row.id}${row.elementIndex > 0 ? ` El.${row.elementIndex + 1}` : ''}`}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        handleOpenParam(row);
+                      }}
+                    >
+                      →
+                    </button>
+                  </td>
                   <td className="library-flag-col">
                     <button
                       type="button"

@@ -1,0 +1,11 @@
+& "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\MSBuild\Current\Bin\MSBuild.exe" "C:\projects\sy_99\Sysex77-master\Builds\VisualStudio2022\Sysex77.sln" /p:Configuration=Release /p:Platform=x64 /m
+
+
+cd c:\projects\sy_99\ui
+npm install	
+npm run dev
+
+Debug
+& "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\MSBuild\Current\Bin\MSBuild.exe" `
+  "C:\projects\sy_99\Sysex77-master\Builds\VisualStudio2022\Sysex77.sln" `
+  /p:Configuration=Debug /p:Platform=x64 /t:Rebuild /m /v:minimal

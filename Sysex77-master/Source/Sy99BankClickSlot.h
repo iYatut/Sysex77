@@ -6,6 +6,7 @@
 #pragma once
 
 #include "Sy99Lazy0040Fetch.h"
+#include "Sy99InvokeBulkLoad.h"
 #include "VoicesTableModel.h"
 
 inline void sy99FinishBankVoiceSlotOpen (Sy99LibraryContentPage page,
@@ -19,7 +20,7 @@ inline void sy99FinishBankVoiceSlotOpen (Sy99LibraryContentPage page,
         bankSelectedVoiceNameValue.setValue (juce::var (bankSelectedVoiceName));
     }
 
-    if (! sy99ShouldDeferBankClickEditorApply())
+    if (parsed)
         bankVoiceSlotApplyTrigger.setValue (++bankVoiceSlotApplyNonce);
 
     if (auto& highlight = libraryVoiceHighlightCallback(); highlight != nullptr)
@@ -39,10 +40,26 @@ inline void sy99FinishBankVoiceSlotOpen (Sy99LibraryContentPage page,
             programChange (mm);
     }
 
-    sy99MaybeRequestBankClick0040Fetch (mm,
-                                        sy99VoiceBulkMemoryTypeForContentPage (page));
-
     scheduleEditorSlotApplyGraceClear();
+
+    if (parsed && ! libraryVoiceSuppressProgramChangeSend() && ! libraryVoiceSuppressAutoSlotOpen())
+    {
+        const uint8 memoryType = sy99VoiceBulkMemoryTypeForContentPage (page);
+        const bool recallSent = ! libraryVoiceSuppressProgramChangeSend()
+                                && libraryVoiceProgramChangeCallback() != nullptr;
+
+        if (recallSent)
+        {
+            sy99ArmBankClickHwRefreshAfterRecall (mm, memoryType);
+
+            if (! libraryVoiceRecallDeferredToMidiOpen())
+                sy99BeginBankClickHwRefreshAfterRecallWait();
+        }
+        else
+        {
+            sy99ScheduleBankClickHwRefresh (mm, memoryType, parsed);
+        }
+    }
 }
 
 inline void sy99OpenVoiceSlotFromCapture (Sy99LibraryContentPage page,
@@ -52,7 +69,9 @@ inline void sy99OpenVoiceSlotFromCapture (Sy99LibraryContentPage page,
                                           const juce::Array<int>& lengths,
                                           const juce::StringArray* manifestNames) noexcept
 {
+    sy99AbortActiveBankClick0040CaptureIfAny();
     ++sy99BankClick0040FetchGeneration();
+    sy99InvokeBulkLoadPlayer().cancel();
 
     const bool parsed = ingestLm8101FromBankVoiceSlotAndLog (mm, capture, offsets, lengths);
 

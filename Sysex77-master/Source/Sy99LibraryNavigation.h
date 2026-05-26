@@ -75,6 +75,13 @@ inline void resetLibraryRecallContext() noexcept
     libraryRecallContext() = {};
 }
 
+/** One-shot: next outbound slot recall uses CC0+CC32+PC (after Full Sync or deferred startup recall). */
+inline bool& libraryForceNextRecallFullTriple() noexcept
+{
+    static bool force = false;
+    return force;
+}
+
 /** Legacy shim — MSB only; prefer libraryRecallContext(). */
 inline int& libraryRecallContextBankMsb() noexcept
 {
@@ -210,6 +217,10 @@ inline bool sy99HostSynthNavInSync (Sy99LibraryContentPage page) noexcept
 inline bool libraryOutboundNeedsFullTriple (Sy99LibraryContentPage page, int mm) noexcept
 {
     juce::ignoreUnused (mm);
+
+    if (libraryForceNextRecallFullTriple())
+        return true;
+
     return ! sy99HostSynthNavInSync (page);
 }
 
